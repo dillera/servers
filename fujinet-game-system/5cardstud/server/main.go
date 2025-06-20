@@ -119,7 +119,7 @@ func apiState(c *gin.Context) {
 
 		if state != nil {
 			if state.clientPlayer >= 0 {
-				state.runGameLogic()
+				state.RunGameLogic()
 				saveState(state)
 			}
 			state = state.createClientState()

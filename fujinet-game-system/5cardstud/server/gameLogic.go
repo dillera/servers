@@ -3,14 +3,14 @@ package main
 import (
 	"fmt"
 	"log"
-	"math"
 	"math/rand"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
-	"github.com/ericcarrgh/cardrank"
-	"github.com/mitchellh/hashstructure/v2"
+	"github.com/cardrank/cardrank"
+	hashstructure "github.com/mitchellh/hashstructure/v2"
 	"golang.org/x/exp/slices"
 )
 
@@ -37,11 +37,15 @@ Winning hands - tied hands split the pot, remainder is discarded
 	- 4th street+ - 10
 */
 
-const ANTE = 1
-const BRINGIN = 2
-const LOW = 5
-const HIGH = 10
-const STARTING_PURSE = 200
+const (
+	ANTE        = 1
+	BRINGIN     = 2 // Not used in Texas Hold'em
+	LOW         = 5 // Not used in Texas Hold'em
+	HIGH        = 10 // Not used in Texas Hold'em
+	SB          = 5 // Small Blind
+	BB          = 10 // Big Blind
+	STARTING_PURSE = 1000
+)
 const MOVE_TIME_GRACE_SECONDS = 4
 const BOT_TIME_LIMIT = time.Second * time.Duration(3)
 const PLAYER_TIME_LIMIT = time.Second * time.Duration(39)
@@ -100,7 +104,7 @@ type Player struct {
 
 	// Internal
 	isBot    bool
-	cards    []card
+	cards    []card // 2 hole cards
 	lastPing time.Time
 }
 
@@ -114,6 +118,7 @@ type GameState struct {
 	Viewing      int         `json:"v"`
 	ValidMoves   []validMove `json:"vm"`
 	Players      []Player    `json:"pl"`
+	CommunityCards []card `json:"cc"`
 
 	// Internal
 	deck          []card
@@ -164,6 +169,7 @@ func createGameState(playerCount int, registerLobby bool) *GameState {
 	state.Round = 0
 	state.ActivePlayer = -1
 	state.registerLobby = registerLobby
+	state.CommunityCards = []card{}
 
 	// Pre-populate player pool with bots
 	for i := 0; i < playerCount; i++ {
@@ -203,10 +209,11 @@ func (state *GameState) newRound() {
 
 	state.Round++
 
-	// Clear pot at start so players can anti
+	// Clear community cards and pot at start of a new hand
 	if state.Round == 1 {
 		state.Pot = 0
 		state.gameOver = false
+		state.CommunityCards = []card{}
 	}
 
 	// Reset players for this round
@@ -240,16 +247,10 @@ func (state *GameState) newRound() {
 				}
 			}
 
-			// Reset player status and take the ANTI
-			if player.Purse > 2 {
-				player.Status = STATUS_PLAYING
-				player.Purse -= ANTE
-				state.Pot += ANTE
-			} else {
-				// Player doesn't have enough money to play
-				player.Status = STATUS_WAITING
-			}
-			player.cards = []card{}
+			// Reset player status
+			player.Status = STATUS_PLAYING
+			player.cards = []card{} // Clear cards for new hand
+			player.Bet = 0 // Clear bets for new hand
 		}
 
 		// Reset player's last move/bet for this round
@@ -263,20 +264,60 @@ func (state *GameState) newRound() {
 
 	// First round of a new game? Shuffle the cards and deal an extra card
 	if state.Round == 1 {
-
-		// Shuffle the deck 7 times :)
+			// Shuffle the deck 7 times :)
 		for shuffle := 0; shuffle < 7; shuffle++ {
 			rand.Shuffle(len(state.deck), func(i, j int) { state.deck[i], state.deck[j] = state.deck[j], state.deck[i] })
 		}
 		state.deckIndex = 0
-		state.dealCards()
 		if state.LastResult == WAITING_MESSAGE {
 			state.LastResult = ""
 		}
-	}
 
-	state.dealCards()
-	state.ActivePlayer = state.getPlayerWithBestVisibleHand(state.Round > 1)
+		// Deal 2 hole cards to each player
+		for cardNum := 0; cardNum < 2; cardNum++ {
+			for i := 0; i < len(state.Players); i++ {
+				player := &state.Players[i]
+				if player.Status == STATUS_PLAYING {
+					player.cards = append(player.cards, state.deck[state.deckIndex])
+					state.deckIndex++
+				}
+			}
+		}
+
+		// Determine dealer, small blind, big blind
+		// For simplicity, let's assume the first active player is the dealer for now.
+		// This will need more robust logic later for button rotation.
+		dealerIndex := -1
+		for i, p := range state.Players {
+			if p.Status == STATUS_PLAYING {
+				dealerIndex = i
+				break
+			}
+		}
+
+		if dealerIndex != -1 {
+			smallBlindIndex := (dealerIndex + 1) % len(state.Players)
+			bigBlindIndex := (dealerIndex + 2) % len(state.Players)
+
+			// Post Small Blind
+			state.Players[smallBlindIndex].Purse -= SB
+			state.Players[smallBlindIndex].Bet += SB
+			state.Pot += SB
+			state.Players[smallBlindIndex].Move = fmt.Sprintf("POST %d", SB)
+
+			// Post Big Blind
+			state.Players[bigBlindIndex].Purse -= BB
+			state.Players[bigBlindIndex].Bet += BB
+			state.Pot += BB
+			state.Players[bigBlindIndex].Move = fmt.Sprintf("POST %d", BB)
+			state.currentBet = BB
+
+			// First player to act is left of Big Blind
+			state.ActivePlayer = (bigBlindIndex + 1) % len(state.Players)
+		} else {
+			state.ActivePlayer = 0 // Fallback if no active players
+		}
+	}
 	state.resetPlayerTimer(true)
 }
 
@@ -287,7 +328,7 @@ func (state *GameState) getPlayerWithBestVisibleHand(highHand bool) int {
 	for i := 0; i < len(state.Players); i++ {
 		player := &state.Players[i]
 		if player.Status == STATUS_PLAYING {
-			rank := getRank(player.cards[1:len(player.cards)])
+			rank := getRank(player.cards, state.CommunityCards)
 
 			// Add player number to start of rank to hold on to when sorting
 			rank = append([]int{i}, rank...)
@@ -320,14 +361,25 @@ func (state *GameState) getPlayerWithBestVisibleHand(highHand bool) int {
 	return result
 }
 
-func (state *GameState) dealCards() {
-	for i, player := range state.Players {
+func (state *GameState) dealCommunityCards(count int) {
+	for i := 0; i < count; i++ {
+		state.CommunityCards = append(state.CommunityCards, state.deck[state.deckIndex])
+		state.deckIndex++
+	}
+}
+
+func (state *GameState) resetPlayersForNewBettingRound() {
+	state.currentBet = 0
+	state.raiseCount = 0
+	state.raiseAmount = 0
+	for i := 0; i < len(state.Players); i++ {
+		player := &state.Players[i]
 		if player.Status == STATUS_PLAYING {
-			player.cards = append(player.cards, state.deck[state.deckIndex])
-			state.Players[i] = player
-			state.deckIndex++
+			player.Bet = 0
+			player.Move = ""
 		}
 	}
+	state.nextValidPlayer() // Set the active player for the new round
 }
 
 func (state *GameState) addPlayer(playerName string, isBot bool) {
@@ -455,7 +507,7 @@ func (state *GameState) endGame(abortGame bool) {
 }
 
 // Emulates simplified player/logic for 5 card stud
-func (state *GameState) runGameLogic() {
+func (state *GameState) RunGameLogic() {
 	state.playerPing()
 
 	// We can't play a game until there are at least 2 players
@@ -508,10 +560,29 @@ func (state *GameState) runGameLogic() {
 	if state.ActivePlayer > -1 {
 		if (state.currentBet > 0 && state.Players[state.ActivePlayer].Bet == state.currentBet) ||
 			(state.currentBet == 0 && state.Players[state.ActivePlayer].Move != "") {
-			if state.Round == 4 {
-				state.endGame(false)
-			} else {
-				state.newRound()
+			allPlayersMoved := true
+			for _, player := range state.Players {
+				if player.Status == STATUS_PLAYING && player.Move == "" {
+					allPlayersMoved = false
+					break
+				}
+			}
+			if allPlayersMoved || state.wonByFolds {
+				if state.Round == 1 && !state.wonByFolds { // Pre-flop -> Flop
+					state.dealCommunityCards(3)
+					state.Round++
+					state.resetPlayersForNewBettingRound()
+				} else if state.Round == 2 && !state.wonByFolds { // Flop -> Turn
+					state.dealCommunityCards(1)
+					state.Round++
+					state.resetPlayersForNewBettingRound()
+				} else if state.Round == 3 && !state.wonByFolds { // Turn -> River
+					state.dealCommunityCards(1)
+					state.Round++
+					state.resetPlayersForNewBettingRound()
+				} else { // River -> Showdown/End Game
+					state.endGame(false)
+				}
 			}
 			return
 		}
@@ -555,47 +626,62 @@ func (state *GameState) runGameLogic() {
 
 		// If this is a bot, pick the best move using some simple logic (sometimes random)
 		if state.Players[state.ActivePlayer].isBot {
+			rank := getRank(cards, state.CommunityCards)
+			bestHandRank := rank[0] // Assuming getRank returns a single integer rank from cardrank
 
-			// Potential TODO: If on round 5 and check is not an option, fold if there is a visible hand that beats the bot's hand.
-			//if len(cards) == 5 && len(moves) > 1 && moves[1].Move == "CH" {}
+			// Simple AI logic for Texas Hold'em
+			// This is a very basic AI and can be greatly improved.
 
-			// Hardly ever fold early if a BOT has an jack or higher.
-			if state.Round < 3 && len(moves) > 1 && rand.Intn(3) > 0 && slices.ContainsFunc(cards, func(c card) bool { return c.value > 10 }) {
-				choice = 1
-			}
-
-			// Likely don't fold if BOT has a pair or better
-			rank := getRank(cards)
-			if rank[0] < 300 && rand.Intn(20) > 0 {
-				choice = 1
-			}
-
-			// Don't fold if BOT has a 2 pair or better
-			if rank[0] < 200 {
-				choice = 1
-			}
-
-			// Raise the bet if three of a kind or better
-			if len(moves) > 2 && rank[0] < 312 && state.currentBet < LOW {
-				choice = 2
-			} else if len(moves) > 2 && state.getPlayerWithBestVisibleHand(true) == state.ActivePlayer && state.currentBet < HIGH && (rank[0] < 306) {
-				choice = len(moves) - 1
-			} else {
-
-				// Consider bet/call/raise most of the time
-				if len(moves) > 1 && rand.Intn(3) > 0 && (len(cards) > 2 ||
-					cards[0].value == cards[1].value ||
-					math.Abs(float64(cards[1].value-cards[0].value)) < 3 ||
-					cards[0].value > 8 ||
-					cards[1].value > 5) {
-
-					// Avoid endless raises
-					if state.currentBet >= 20 || rand.Intn(3) > 0 {
+			// Pre-flop strategy (Round 1)
+			if state.Round == 1 {
+				// Check for strong starting hands (e.g., high pairs, suited connectors, high cards)
+				// This part needs more detailed logic based on hole cards only.
+				// For now, let's just make it play somewhat aggressively with good cards.
+				if (cards[0].value == cards[1].value && cards[0].value >= 8) || // Pairs 8s+
+					(cards[0].value >= 10 && cards[1].value >= 10) || // Two high cards (TJ+)
+					(cards[0].suit == cards[1].suit && cards[0].value >= 7 && cards[1].value >= 7) { // Suited connectors 7+
+					// Try to raise or call
+					if len(moves) > 2 && rand.Intn(2) == 0 { // 50% chance to raise if possible
+						choice = len(moves) - 1 // Take the highest available bet/raise
+					} else if len(moves) > 1 { // Otherwise call or check
+						choice = 1
+					}
+				} else if state.currentBet == 0 && slices.ContainsFunc(moves, func(m validMove) bool { return m.Move == "CH" }) { // If no bet, check
+					choice = slices.IndexFunc(moves, func(m validMove) bool { return m.Move == "CH" })
+				} else { // Fold weak hands pre-flop
+					choice = 0 // Fold
+				}
+			} else { // Post-flop strategy (Round 2, 3, 4)
+				// Evaluate hand strength using `bestHandRank`
+				if bestHandRank >= 7000 { // Very strong hand (e.g., Straight, Flush, Full House, Quads, Straight Flush)
+					if len(moves) > 2 && rand.Intn(2) == 0 { // 50% chance to raise
+						choice = len(moves) - 1
+					} else if len(moves) > 1 {
+						choice = 1 // Call
+					}
+				} else if bestHandRank >= 3000 { // Medium strong hand (e.g., Two Pair, Three of a Kind)
+					if state.currentBet == 0 && slices.ContainsFunc(moves, func(m validMove) bool { return m.Move == "CH" }) {
+						choice = slices.IndexFunc(moves, func(m validMove) bool { return m.Move == "CH" })
+					} else if len(moves) > 1 && rand.Intn(3) != 0 { // 66% chance to call
 						choice = 1
 					} else {
-						choice = rand.Intn(len(moves)-1) + 1
+						choice = 0 // Fold
 					}
+				} else { // Weak hand
+					if state.currentBet == 0 && slices.ContainsFunc(moves, func(m validMove) bool { return m.Move == "CH" }) {
+						choice = slices.IndexFunc(moves, func(m validMove) bool { return m.Move == "CH" })
+					} else {
+						choice = 0 // Fold
+					}
+				}
+			}
 
+			// If the chosen move is not available, default to fold or check
+			if choice >= len(moves) {
+				if slices.ContainsFunc(moves, func(m validMove) bool { return m.Move == "CH" }) {
+					choice = slices.IndexFunc(moves, func(m validMove) bool { return m.Move == "CH" })
+				} else {
+					choice = 0 // Default to fold
 				}
 			}
 		}
@@ -714,35 +800,44 @@ func (state *GameState) performMove(move string, internalCall ...bool) bool {
 
 	if move == "FO" { // FOLD
 		player.Status = STATUS_FOLDED
-	} else if move != "CH" { // Not Checking
-
-		// Default raise to 0 (effectively a CALL)
-		raise := 0
-
-		if move == "RA" {
-			raise = state.raiseAmount
-			state.raiseCount++
-		} else if move == "BH" {
-			raise = HIGH
-			state.raiseAmount = HIGH
-		} else if move == "BL" {
-			raise = LOW
-			state.raiseAmount = LOW
-
-			// If betting LOW the very first time and the pot is BRINGIN
-			// just make their bet enough to make the total bet LOW
-			if state.currentBet == BRINGIN {
-				raise -= BRINGIN
-			}
-		} else if move == "BB" {
-			raise = BRINGIN
+	} else if move == "CH" { // CHECK
+		// No change to bet or purse
+	} else if move == "ALLIN" { // ALLIN
+		betAmount := player.Purse
+		player.Bet += betAmount
+		player.Purse = 0
+		state.Pot += betAmount
+		if player.Bet > state.currentBet {
+			state.currentBet = player.Bet
+		}
+	} else { // BET, CALL, RAISE
+		betAmount := 0
+		// Assuming the move string contains the amount for BET/RAISE/CALL for simplicity for now
+		// In a real implementation, this would be derived from the move type and current bet
+		// For now, let's assume 'move' is like 'BET 100' or 'CALL 50'
+		parts := strings.Split(move, " ")
+		if len(parts) > 1 {
+			betAmount, _ = strconv.Atoi(parts[1])
 		}
 
-		// Place the bet
-		delta := state.currentBet + raise - player.Bet
-		state.currentBet += raise
-		player.Bet += delta
-		player.Purse -= delta
+		if betAmount > player.Purse {
+			betAmount = player.Purse // Cannot bet more than available purse
+		}
+
+		player.Purse -= betAmount
+		state.Pot += betAmount
+		player.Bet += betAmount
+
+		if player.Bet > state.currentBet {
+			state.currentBet = player.Bet
+		}
+
+		// For RAISE, update raiseCount and raiseAmount if needed
+		if strings.Contains(move, "RAISE") {
+			state.raiseCount++
+			// This needs more sophisticated logic for actual raise amounts in NLHE
+			// For now, we'll just track that a raise happened.
+		}
 	}
 
 	player.Move = moveLookup[move]
@@ -779,50 +874,53 @@ func (state *GameState) nextValidPlayer() {
 func (state *GameState) getValidMoves() []validMove {
 	moves := []validMove{}
 
-	// Any player after the bring-in player may fold
-	if state.currentBet > 0 || state.Round > 1 {
-		moves = append(moves, validMove{Move: "FO", Name: "Fold"})
-	}
-
 	player := state.Players[state.ActivePlayer]
 
-	// First check options if there is no BET yet (a BRINGIN is not considered a BET)
-	if state.currentBet < LOW {
-		// If nothing has been bet, force BET BRINGIN (2) on round 1
-		// otherwise a CHECK.
-		// If there is a bet, allow for a CALL
-		if state.currentBet == 0 {
-			if state.Round == 1 {
-				moves = append(moves, validMove{Move: "BB", Name: fmt.Sprint("Post ", BRINGIN)})
-			} else {
-				moves = append(moves, validMove{Move: "CH", Name: "Check"})
+	// Always allow fold
+	moves = append(moves, validMove{Move: "FO", Name: "Fold"})
+
+	// Calculate amount needed to call
+	callAmount := state.currentBet - player.Bet
+
+	// If currentBet is 0, player can CHECK or BET
+	if state.currentBet == 0 {
+		moves = append(moves, validMove{Move: "CH", Name: "Check"})
+		// Player can bet any amount from BB to their purse
+		if player.Purse >= BB {
+			moves = append(moves, validMove{Move: fmt.Sprintf("BET %d", BB), Name: fmt.Sprintf("Bet %d", BB)}) // Min bet is BB
+			// For simplicity, let's also add a common bet size like 2*BB or half pot
+			if player.Purse >= 2*BB {
+				moves = append(moves, validMove{Move: fmt.Sprintf("BET %d", 2*BB), Name: fmt.Sprintf("Bet %d", 2*BB)})
 			}
-		} else if player.Purse >= state.currentBet-player.Bet {
-			moves = append(moves, validMove{Move: "CA", Name: "Call"})
+		}
+	} else { // A bet has been made
+		// Player can CALL
+		if player.Purse >= callAmount {
+			moves = append(moves, validMove{Move: fmt.Sprintf("CALL %d", callAmount), Name: fmt.Sprintf("Call %d", callAmount)})
 		}
 
-		// Allow LOW bet on 2nd and 3rd street
-		if player.Purse >= LOW && state.Round < 3 {
-			moves = append(moves, validMove{Move: "BL", Name: fmt.Sprint("Bet ", LOW)})
+		// Player can RAISE
+		// Minimum raise is the size of the last bet/raise, or BB if no previous raise
+		minRaiseAmount := BB
+		// This needs to be more robust, tracking the actual last raise amount
+		// For now, let's assume min raise is currentBet if it's not 0, otherwise BB
+		if state.currentBet > 0 {
+			minRaiseAmount = state.currentBet
 		}
 
-		// Allow HIGH bet if on 4th or 5th street, or 3rd street + pair showing
-		if player.Purse >= HIGH && (state.Round >= 3 ||
-			(state.Round == 2 && slices.IndexFunc(state.Players, func(p Player) bool {
-				return p.Status == STATUS_PLAYING && p.cards[1].value == p.cards[2].value
-			}) >= 0)) {
-			moves = append(moves, validMove{Move: "BH", Name: fmt.Sprint("Bet ", HIGH)})
+		raisableAmount := callAmount + minRaiseAmount
+		if player.Purse >= raisableAmount {
+			moves = append(moves, validMove{Move: fmt.Sprintf("RAISE %d", raisableAmount), Name: fmt.Sprintf("Raise %d", raisableAmount)})
+			// Add another raise option, e.g., 2*minRaiseAmount
+			if player.Purse >= callAmount + 2*minRaiseAmount {
+				moves = append(moves, validMove{Move: fmt.Sprintf("RAISE %d", callAmount + 2*minRaiseAmount), Name: fmt.Sprintf("Raise %d", callAmount + 2*minRaiseAmount)})
+			}
 		}
-	} else {
-		// A bet as already been made. Allow a call
-		if player.Purse >= state.currentBet-player.Bet {
-			moves = append(moves, validMove{Move: "CA", Name: "Call"})
-		}
+	}
 
-		// Allow a raise if max number of rounds for the round has not been met
-		if state.Players[state.ActivePlayer].Purse >= state.currentBet-player.Bet+state.raiseAmount && state.raiseCount < 3 {
-			moves = append(moves, validMove{Move: "RA", Name: fmt.Sprint("Raise ", state.raiseAmount)})
-		}
+	// Always allow ALLIN if player has chips
+	if player.Purse > 0 {
+		moves = append(moves, validMove{Move: "ALLIN", Name: fmt.Sprintf("All-in %d", player.Purse)})
 	}
 
 	return moves
@@ -883,14 +981,14 @@ func (state *GameState) createClientState() *GameState {
 
 		switch player.Status {
 		case STATUS_PLAYING:
-			// Loop through and build hand string, taking
-			// care to not disclose the first card of a hand to other players
-			for cardIndex, card := range player.cards {
-				if cardIndex > 0 || playerIndex == state.clientPlayer || (state.Round == 5 && !state.wonByFolds) {
+			// For Texas Hold'em, only the player's own hole cards are visible.
+			// Opponents' hole cards are always masked.
+			if playerIndex == state.clientPlayer {
+				for _, card := range player.cards {
 					player.Hand += valueLookup[card.value] + suitLookup[card.suit]
-				} else {
-					player.Hand += "??"
 				}
+			} else {
+				player.Hand = "?? ??" // Mask opponent's two hole cards
 			}
 		case STATUS_FOLDED:
 			player.Hand = "??"
@@ -899,6 +997,9 @@ func (state *GameState) createClientState() *GameState {
 		// Add this player to the copy of the state going out
 		stateCopy.Players = append(stateCopy.Players, player)
 	}
+
+	// Add community cards to the client state
+	stateCopy.CommunityCards = state.CommunityCards
 
 	// Determine valid moves for this player (if their turn)
 	if stateCopy.ActivePlayer == 0 {
@@ -954,38 +1055,35 @@ func (state *GameState) getHumanPlayerCountInfo() (int, int) {
 }
 
 // Ranks hand as an array of large to small values representing sets of 4 or less. Intended for 4 visible cards or simple AI
-func getRank(cards []card) []int {
-	rank := []int{}
-	rankSuit := []int{}
-	sets := map[int]int{}
+var twoPlusTwoEval = cardrank.NewTwoPlusTwoEval()
 
-	// Loop through hand once to create sets (cards of the same value)
-	for i := 0; i < len(cards); i++ {
-		sets[cards[i].value]++
+func toCardrankSuit(suit int) cardrank.Suit {
+	switch suit {
+	case 0:
+		return cardrank.Spade
+	case 1:
+		return cardrank.Heart
+	case 2:
+		return cardrank.Diamond
+	case 3:
+		return cardrank.Club
+	}
+	return cardrank.InvalidSuit // Should not happen
+}
+
+func getRank(holeCards []card, communityCards []card) []int {
+	allCards := append(holeCards, communityCards...)
+
+	// Convert custom card struct to cardrank.Card
+	crCards := make([]cardrank.Card, len(allCards))
+	for i, c := range allCards {
+		crCards[i] = cardrank.New(cardrank.Rank(c.value), toCardrankSuit(c.suit))
 	}
 
-	// Loop through a second time to add the rank of each set (or single card)
-	for i := 0; i < len(cards); i++ {
-		val := cards[i].value
-		set := sets[val]
+	// Evaluate the hand using cardrank's TwoPlusTwo evaluator
+	rank := twoPlusTwoEval(crCards)
 
-		// Ranking highest value the lowest so ascending sort can be used
-		rank = append(rank, 100*(5-set)-val)
-
-		// Ranking with suit as a tie breaker
-		rankSuit = append(rankSuit, 100*(5-set)-(val*4+cards[i].suit))
-
-	}
-
-	sort.Ints(rank)
-	// Fill out empty 999s to make a 4 length to avoid bounds checks
-	for len(rank) < 4 {
-		rank = append(rank, 999)
-	}
-	sort.Ints(rankSuit)
-	rank = append(rank, rankSuit...)
-	for len(rank) < 8 {
-		rank = append(rank, 999)
-	}
-	return rank
+	// The cardrank library returns an EvalRank. We need to convert this to an int slice.
+	// For now, we'll just return the integer value of the rank.
+	return []int{int(rank)}
 }
