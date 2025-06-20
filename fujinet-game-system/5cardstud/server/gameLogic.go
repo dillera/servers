@@ -651,32 +651,43 @@ func (state *GameState) RunGameLogic() {
 				} else { // Fold weak hands pre-flop
 					choice = 0 // Fold
 				}
-			} else { // Post-flop strategy (Round 2, 3, 4)
-				// Evaluate hand strength using `bestHandRank`
-				if bestHandRank >= 7000 { // Very strong hand (e.g., Straight, Flush, Full House, Quads, Straight Flush)
-					if len(moves) > 2 && rand.Intn(2) == 0 { // 50% chance to raise
-						choice = len(moves) - 1
-					} else if len(moves) > 1 {
-						choice = 1 // Call
-					}
-				} else if bestHandRank >= 3000 { // Medium strong hand (e.g., Two Pair, Three of a Kind)
-					if state.currentBet == 0 && slices.ContainsFunc(moves, func(m validMove) bool { return m.Move == "CH" }) {
-						choice = slices.IndexFunc(moves, func(m validMove) bool { return m.Move == "CH" })
-					} else if len(moves) > 1 && rand.Intn(3) != 0 { // 66% chance to call
-						choice = 1
-					} else {
-						choice = 0 // Fold
-					}
-				} else { // Weak hand
-					if state.currentBet == 0 && slices.ContainsFunc(moves, func(m validMove) bool { return m.Move == "CH" }) {
-						choice = slices.IndexFunc(moves, func(m validMove) bool { return m.Move == "CH" })
-					} else {
-						choice = 0 // Fold
+			}
+			// Post-flop strategy (Round 2, 3, 4)
+			if bestHandRank >= 7000 { // Very strong hand (e.g., Straight, Flush, Full House, Quads, Straight Flush)
+				if len(moves) > 2 && rand.Intn(2) == 0 { // 50% chance to raise
+					choice = len(moves) - 1
+				} else if len(moves) > 1 {
+					choice = 1 // Call
+				}
+			} else if bestHandRank >= 3000 { // Medium strong hand (e.g., Two Pair, Three of a Kind)
+				if state.currentBet == 0 && slices.ContainsFunc(moves, func(m validMove) bool { return m.Move == "CH" }) {
+					choice = slices.IndexFunc(moves, func(m validMove) bool { return m.Move == "CH" })
+				} else if len(moves) > 1 && rand.Intn(3) != 0 { // 66% chance to call
+					choice = 1
+				} else {
+					choice = 0 // Fold
+				}
+			} else { // Weak hand
+				if state.currentBet == 0 && slices.ContainsFunc(moves, func(m validMove) bool { return m.Move == "CH" }) {
+					choice = slices.IndexFunc(moves, func(m validMove) bool { return m.Move == "CH" })
+				} else {
+					choice = 0 // Fold
 					}
 				}
 			}
 
+		// Apply the chosen move
+			if choice < len(moves) {
+				chosenMove := moves[choice]
+				state.Players[state.ActivePlayer].Move = chosenMove.Move
+			} else {
+				// Fallback if somehow an invalid choice was made (shouldn't happen with current logic)
+				state.Players[state.ActivePlayer].Move = "FO" // Default to fold
+				state.Players[state.ActivePlayer].Status = STATUS_FOLDED
+			}
+
 			// If the chosen move is not available, default to fold or check
+			// This block is now mostly redundant due to the above, but keeping for safety if logic changes.
 			if choice >= len(moves) {
 				if slices.ContainsFunc(moves, func(m validMove) bool { return m.Move == "CH" }) {
 					choice = slices.IndexFunc(moves, func(m validMove) bool { return m.Move == "CH" })
@@ -684,22 +695,19 @@ func (state *GameState) RunGameLogic() {
 					choice = 0 // Default to fold
 				}
 			}
+			// Bounds check - clamp the move to the end of the array if a higher move is desired.
+			// This may occur if a bot wants to call, but cannot, due to limited funds.
+			if choice > len(moves)-1 {
+				choice = len(moves) - 1
+			}
+
+			// Apply the chosen move
+			move := moves[choice]
+			state.performMove(move.Move, true)
 		}
-
-		// Bounds check - clamp the move to the end of the array if a higher move is desired.
-		// This may occur if a bot wants to call, but cannot, due to limited funds.
-		if choice > len(moves)-1 {
-			choice = len(moves) - 1
-		}
-
-		move := moves[choice]
-
-		state.performMove(move.Move, true)
 	}
 
-}
-
-// Drop players that left or have not pinged within the expected timeout
+	// Drop players that left or have not pinged within the expected timeout
 func (state *GameState) dropInactivePlayers(inMiddleOfGame bool, dropForNewPlayer bool) {
 	cutoff := time.Now().Add(PLAYER_PING_TIMEOUT)
 	players := []Player{}
