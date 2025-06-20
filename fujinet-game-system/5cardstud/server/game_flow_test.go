@@ -17,7 +17,7 @@ func TestTexasHoldemGameFlow(t *testing.T) {
 	// Initialize game state (some fields are set by createGameState)
 	state.Players[0].cards = make([]card, 2)
 	state.Players[1].cards = make([]card, 2)
-	state.moveExpires = time.Now().Add(1 * time.Second) // Set a short timer for testing
+	state.moveExpires = time.Now() // Set move expiration to now for immediate processing in tests
 	state.Round = 0 // Pre-game setup
 	state.Pot = 0
 	state.CommunityCards = make([]card, 0)
@@ -37,27 +37,31 @@ func TestTexasHoldemGameFlow(t *testing.T) {
 	// Simulate game progression through rounds
 	// This will be an iterative process, calling RunGameLogic and asserting state.
 
-	// Example: Pre-flop (Round 1)
-	// Run game logic until round ends or a winner is determined
-	for state.Round <= 4 && countPlayersInHand(state) > 1 {
-		// Simulate a short delay to allow RunGameLogic to process
-		time.Sleep(10 * time.Millisecond)
+	// Simulate game progression through rounds
+	maxTurns := 100 // Set a maximum number of turns to prevent infinite loops
+	turn := 0
+
+	for state.Round <= 4 && countPlayersInHand(state) > 1 && turn < maxTurns {
+		turn++
+		t.Logf("--- Turn %d: Before RunGameLogic ---", turn)
+		t.Logf("Round: %d, ActivePlayer: %d, Pot: %d, P1 Status: %d, P2 Status: %d, P1 Move: %s, P2 Move: %s",
+			state.Round, state.ActivePlayer, state.Pot, state.Players[0].Status, state.Players[1].Status, state.Players[0].Move, state.Players[1].Move)
+		t.Logf("Community Cards: %v", state.CommunityCards)
 
 		state.RunGameLogic()
+		state.moveExpires = time.Now() // Force move expiration for testing
 
-		// Add assertions here to check game state after each RunGameLogic call
-		// For example, check active player, pot, player moves, etc.
-		// t.Logf("Round: %d, ActivePlayer: %d, Pot: %d, P1 Move: %s, P2 Move: %s",
-		// 	state.Round, state.ActivePlayer, state.Pot, state.Players[0].Move, state.Players[1].Move)
+		t.Logf("--- Turn %d: After RunGameLogic ---", turn)
+		t.Logf("Round: %d, ActivePlayer: %d, Pot: %d", state.Round, state.ActivePlayer, state.Pot)
+		t.Logf("P1 Purse: %d, P2 Purse: %d", state.Players[0].Purse, state.Players[1].Purse)
+		t.Logf("Community Cards: %v", state.CommunityCards)
+		t.Logf("---------------------------")
 
-		// This loop needs more sophisticated logic to advance rounds and handle betting.
-		// For now, it will likely loop indefinitely or until an error.
-		// We need to implement logic to detect end of betting round and advance to next round.
+		// RunGameLogic handles advancing the active player
 	}
 
 	// Final assertions (e.g., winner, final pot)
-	// t.Logf("Game Over. Winner: %s, Final Pot: %d", state.Winner, state.Pot)
-	// t.Logf("Player1 Purse: %d, Player2 Purse: %d", state.Players[0].Purse, state.Players[1].Purse)
+
 
 	// For now, just ensure the test runs without panicking.
 	t.Log("TestTexasHoldemGameFlow completed.")

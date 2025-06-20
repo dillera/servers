@@ -67,6 +67,7 @@ var moveLookup = map[string]string{
 	"BH": "BET", // BET HIGH (e.g. 10)
 	"CA": "CALL",
 	"RA": "RAISE",
+	"ALLIN": "ALLIN",
 }
 
 var botNames = []string{"Clyd", "Jim", "Kirk", "Hulk", "Fry", "Meg", "Grif", "GPT"}
@@ -374,7 +375,9 @@ func (state *GameState) resetPlayersForNewBettingRound() {
 	state.raiseAmount = 0
 	for i := 0; i < len(state.Players); i++ {
 		player := &state.Players[i]
-		if player.Status == STATUS_PLAYING {
+		// Only reset status for players who are still in the hand (not folded or left)
+		if player.Status != STATUS_FOLDED && player.Status != STATUS_LEFT {
+			player.Status = STATUS_PLAYING // Ensure player is set to playing for the new round
 			player.Bet = 0
 			player.Move = ""
 		}
@@ -508,6 +511,7 @@ func (state *GameState) endGame(abortGame bool) {
 
 // Emulates simplified player/logic for 5 card stud
 func (state *GameState) RunGameLogic() {
+	log.Printf("DEBUG: RunGameLogic called. ActivePlayer: %d, Round: %d\n", state.ActivePlayer, state.Round)
 	state.playerPing()
 
 	// We can't play a game until there are at least 2 players
@@ -557,36 +561,7 @@ func (state *GameState) RunGameLogic() {
 	// Check if we should start the next round. One of the following must be true
 	// 1. We got back to the player who made the most recent bet/raise
 	// 2. There were checks/folds around the table
-	if state.ActivePlayer > -1 {
-		if (state.currentBet > 0 && state.Players[state.ActivePlayer].Bet == state.currentBet) ||
-			(state.currentBet == 0 && state.Players[state.ActivePlayer].Move != "") {
-			allPlayersMoved := true
-			for _, player := range state.Players {
-				if player.Status == STATUS_PLAYING && player.Move == "" {
-					allPlayersMoved = false
-					break
-				}
-			}
-			if allPlayersMoved || state.wonByFolds {
-				if state.Round == 1 && !state.wonByFolds { // Pre-flop -> Flop
-					state.dealCommunityCards(3)
-					state.Round++
-					state.resetPlayersForNewBettingRound()
-				} else if state.Round == 2 && !state.wonByFolds { // Flop -> Turn
-					state.dealCommunityCards(1)
-					state.Round++
-					state.resetPlayersForNewBettingRound()
-				} else if state.Round == 3 && !state.wonByFolds { // Turn -> River
-					state.dealCommunityCards(1)
-					state.Round++
-					state.resetPlayersForNewBettingRound()
-				} else { // River -> Showdown/End Game
-					state.endGame(false)
-				}
-			}
-			return
-		}
-	}
+
 
 	// Return if the move timer has not expired
 	// Check timer if no active player, or the active player hasn't already left
@@ -612,7 +587,9 @@ func (state *GameState) RunGameLogic() {
 	}
 
 	// Force a move for this player or BOT if they are in the game and have not folded
+	log.Printf("DEBUG: Player %d Status: %d\n", state.ActivePlayer, state.Players[state.ActivePlayer].Status)
 	if state.Players[state.ActivePlayer].Status == STATUS_PLAYING {
+		log.Printf("DEBUG: Inside STATUS_PLAYING block for Player %d\n", state.ActivePlayer)
 		cards := state.Players[state.ActivePlayer].cards
 		moves := state.getValidMoves()
 
@@ -626,8 +603,8 @@ func (state *GameState) RunGameLogic() {
 
 		// If this is a bot, pick the best move using some simple logic (sometimes random)
 		if state.Players[state.ActivePlayer].isBot {
-			rank := getRank(cards, state.CommunityCards)
-			bestHandRank := rank[0] // Assuming getRank returns a single integer rank from cardrank
+			// rank := getRank(cards, state.CommunityCards)
+			// bestHandRank := rank[0] // Assuming getRank returns a single integer rank from cardrank
 
 			// Simple AI logic for Texas Hold'em
 			// This is a very basic AI and can be greatly improved.
@@ -648,64 +625,60 @@ func (state *GameState) RunGameLogic() {
 					}
 				} else if state.currentBet == 0 && slices.ContainsFunc(moves, func(m validMove) bool { return m.Move == "CH" }) { // If no bet, check
 					choice = slices.IndexFunc(moves, func(m validMove) bool { return m.Move == "CH" })
-				} else { // Fold weak hands pre-flop
-					choice = 0 // Fold
-				}
-			}
-			// Post-flop strategy (Round 2, 3, 4)
-			if bestHandRank >= 7000 { // Very strong hand (e.g., Straight, Flush, Full House, Quads, Straight Flush)
-				if len(moves) > 2 && rand.Intn(2) == 0 { // 50% chance to raise
-					choice = len(moves) - 1
-				} else if len(moves) > 1 {
-					choice = 1 // Call
-				}
-			} else if bestHandRank >= 3000 { // Medium strong hand (e.g., Two Pair, Three of a Kind)
-				if state.currentBet == 0 && slices.ContainsFunc(moves, func(m validMove) bool { return m.Move == "CH" }) {
-					choice = slices.IndexFunc(moves, func(m validMove) bool { return m.Move == "CH" })
-				} else if len(moves) > 1 && rand.Intn(3) != 0 { // 66% chance to call
-					choice = 1
 				} else {
 					choice = 0 // Fold
 				}
-			} else { // Weak hand
+			} else { // Rounds 2, 3, 4 (Flop, Turn, River)
+				// Simple post-flop strategy: Check if possible, otherwise call if affordable, else fold.
 				if state.currentBet == 0 && slices.ContainsFunc(moves, func(m validMove) bool { return m.Move == "CH" }) {
 					choice = slices.IndexFunc(moves, func(m validMove) bool { return m.Move == "CH" })
+				} else if state.currentBet > 0 && len(moves) > 1 && slices.ContainsFunc(moves, func(m validMove) bool { return strings.HasPrefix(m.Move, "CALL") }) { // Check if CALL is an option
+					choice = slices.IndexFunc(moves, func(m validMove) bool { return strings.HasPrefix(m.Move, "CALL") }) // Find the index of CALL
 				} else {
 					choice = 0 // Fold
-					}
 				}
 			}
-
+		}
 		// Apply the chosen move
-			if choice < len(moves) {
-				chosenMove := moves[choice]
-				state.Players[state.ActivePlayer].Move = chosenMove.Move
-			} else {
-				// Fallback if somehow an invalid choice was made (shouldn't happen with current logic)
-				state.Players[state.ActivePlayer].Move = "FO" // Default to fold
-				state.Players[state.ActivePlayer].Status = STATUS_FOLDED
-			}
+		log.Printf("DEBUG: Player %d chose move: %s (choice index: %d)\n", state.ActivePlayer, moves[choice].Move, choice)
+		state.performMove(moves[choice].Move, true)
 
-			// If the chosen move is not available, default to fold or check
-			// This block is now mostly redundant due to the above, but keeping for safety if logic changes.
-			if choice >= len(moves) {
-				if slices.ContainsFunc(moves, func(m validMove) bool { return m.Move == "CH" }) {
-					choice = slices.IndexFunc(moves, func(m validMove) bool { return m.Move == "CH" })
-				} else {
-					choice = 0 // Default to fold
+		// Check for round advancement after a player has made a move
+		allPlayersMovedAndMatchedBet := true
+		for _, player := range state.Players {
+			if player.Status == STATUS_PLAYING {
+				if player.Move == "" {
+					allPlayersMovedAndMatchedBet = false
+					break
+				}
+				if player.Bet < state.currentBet {
+					allPlayersMovedAndMatchedBet = false
+					break
 				}
 			}
-			// Bounds check - clamp the move to the end of the array if a higher move is desired.
-			// This may occur if a bot wants to call, but cannot, due to limited funds.
-			if choice > len(moves)-1 {
-				choice = len(moves) - 1
-			}
+		}
 
-			// Apply the chosen move
-			move := moves[choice]
-			state.performMove(move.Move, true)
+		if allPlayersMovedAndMatchedBet || state.wonByFolds {
+			log.Printf("DEBUG: All players moved and matched bet or won by folds. Advancing round.\n")
+			if state.Round == 1 && !state.wonByFolds { // Pre-flop -> Flop
+				state.dealCommunityCards(3)
+				state.Round++
+				state.resetPlayersForNewBettingRound()
+			} else if state.Round == 2 && !state.wonByFolds { // Flop -> Turn
+				state.dealCommunityCards(1)
+				state.Round++
+				state.resetPlayersForNewBettingRound()
+			} else if state.Round == 3 && !state.wonByFolds { // Turn -> River
+				state.dealCommunityCards(1)
+				state.Round++
+				state.resetPlayersForNewBettingRound()
+			} else { // River -> Showdown/End Game
+				state.endGame(false)
+			}
+			return // Return after advancing round
 		}
 	}
+}
 
 	// Drop players that left or have not pinged within the expected timeout
 func (state *GameState) dropInactivePlayers(inMiddleOfGame bool, dropForNewPlayer bool) {
@@ -788,6 +761,7 @@ func (state *GameState) playerPing() {
 
 // Performs the requested move for the active player, and returns true if successful
 func (state *GameState) performMove(move string, internalCall ...bool) bool {
+	log.Printf("DEBUG: performMove called with move: %s for player %d\n", move, state.ActivePlayer)
 
 	if len(internalCall) == 0 || !internalCall[0] {
 		state.playerPing()
@@ -808,8 +782,9 @@ func (state *GameState) performMove(move string, internalCall ...bool) bool {
 
 	if move == "FO" { // FOLD
 		player.Status = STATUS_FOLDED
+		player.Move = moveLookup[move] // Set player.Move for FOLD
 	} else if move == "CH" { // CHECK
-		// No change to bet or purse
+		player.Move = moveLookup[move] // Set player.Move for CHECK
 	} else if move == "ALLIN" { // ALLIN
 		betAmount := player.Purse
 		player.Bet += betAmount
@@ -818,6 +793,7 @@ func (state *GameState) performMove(move string, internalCall ...bool) bool {
 		if player.Bet > state.currentBet {
 			state.currentBet = player.Bet
 		}
+		player.Move = moveLookup[move] // Set player.Move for ALLIN
 	} else { // BET, CALL, RAISE
 		betAmount := 0
 		// Assuming the move string contains the amount for BET/RAISE/CALL for simplicity for now
@@ -831,6 +807,7 @@ func (state *GameState) performMove(move string, internalCall ...bool) bool {
 		if betAmount > player.Purse {
 			betAmount = player.Purse // Cannot bet more than available purse
 		}
+		player.Move = move // For BET/CALL/RAISE, the move string itself is the full move
 
 		player.Purse -= betAmount
 		state.Pot += betAmount
@@ -848,7 +825,12 @@ func (state *GameState) performMove(move string, internalCall ...bool) bool {
 		}
 	}
 
-	player.Move = moveLookup[move]
+	// Assign the move string directly, or use lookup for simple moves
+	if move == "FO" || move == "CH" || move == "ALLIN" {
+		player.Move = moveLookup[move]
+	} else {
+		player.Move = move
+	}
 	state.nextValidPlayer()
 
 	return true
