@@ -72,7 +72,26 @@ func main() {
 	initializeGameServer()
 	initializeTables()
 
-	router.Run(":" + port)
+	// Load the main game state for the WebSocket hub
+	// We'll use the 7-player dev table for now
+	s, ok := stateMap.Load("dev7")
+	if !ok {
+		log.Fatal("Could not load game state for hub")
+	}
+	gameState := s.(*GameState)
+
+	go hub.run(gameState)
+
+	router.GET("/ws", func(c *gin.Context) {
+		serveWs(c.Writer, c.Request)
+	})
+
+	log.Printf("WebSocket server starting on :"+port) // Client connects to 8080
+
+	if err := router.Run(":" + port); err != nil {
+		log.Fatalf("Failed to run server: %v", err)
+	}
+
 }
 
 // Api Request steps
@@ -230,7 +249,7 @@ func getState(c *gin.Context) (*GameState, func()) {
 }
 
 func saveState(state *GameState) {
-	stateMap.Store(state.table, state)
+	stateMap.Store(state.TableId, state)
 }
 
 func initializeTables() {
@@ -253,7 +272,8 @@ func initializeTables() {
 
 func createTable(serverName string, table string, botCount int, registerLobby bool) {
 	state := createGameState(botCount, registerLobby)
-	state.table = table
+	state.TableId = table
+	stateMap.Store(table, state)
 	state.serverName = serverName
 	saveState(state)
 	state.updateLobby()

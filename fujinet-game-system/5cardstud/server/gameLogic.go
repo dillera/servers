@@ -82,8 +82,8 @@ type validMove struct {
 }
 
 type card struct {
-	value int
-	suit  int
+	Rank int `json:"Rank"`
+	Suit int `json:"Suit"`
 }
 
 type Status int64
@@ -96,30 +96,35 @@ const (
 )
 
 type Player struct {
-	Name   string `json:"n"`
-	Status Status `json:"s"`
-	Bet    int    `json:"b"`
-	Move   string `json:"m"`
-	Purse  int    `json:"p"`
-	Hand   string `json:"h"`
+	Name   string `json:"Name"`
+	Status Status `json:"Status"`
+	Bet    int    `json:"Bet"`
+	Move   string `json:"Move"`
+	Purse  int    `json:"Purse"`
+	Hand   []card `json:"Hand"`
+	IsHuman bool   `json:"IsHuman"`
 
 	// Internal
 	isBot    bool
-	cards    []card // 2 hole cards
 	lastPing time.Time
 }
 
 type GameState struct {
+	GamesPlayed  int    `json:"gamesPlayed"`
+	TableId      string `json:"tableId"`
 	// External (JSON)
-	LastResult   string      `json:"l"`
-	Round        int         `json:"r"`
-	Pot          int         `json:"p"`
-	ActivePlayer int         `json:"a"`
-	MoveTime     int         `json:"m"`
-	Viewing      int         `json:"v"`
-	ValidMoves   []validMove `json:"vm"`
-	Players      []Player    `json:"pl"`
-	CommunityCards []card `json:"cc"`
+	LastResult   string      `json:"LastResult"`
+	Winner       string      `json:"Winner"`
+	Round        int         `json:"Round"`
+	RoundName    string      `json:"roundName"`
+	Pot          int         `json:"Pot"`
+	ActivePlayer int         `json:"ActivePlayer"`
+	MoveTime     int         `json:"MoveTime"`
+	Viewing      int         `json:"Viewing"`
+	ValidMoves   []validMove `json:"ValidMoves"`
+	Players      []Player    `json:"Players"`
+	CommunityCards []card `json:"CommunityCards"`
+	CurrentBet int `json:"currentBet"`
 
 	// Internal
 	deck          []card
@@ -127,7 +132,6 @@ type GameState struct {
 	currentBet    int
 	gameOver      bool
 	clientPlayer  int
-	table         string
 	wonByFolds    bool
 	moveExpires   time.Time
 	serverName    string
@@ -160,7 +164,7 @@ func createGameState(playerCount int, registerLobby bool) *GameState {
 	// Create deck of 52 cards
 	for suit := 0; suit < 4; suit++ {
 		for value := 2; value < 15; value++ {
-			card := card{value: value, suit: suit}
+			card := card{Rank: value, Suit: suit}
 			deck = append(deck, card)
 		}
 	}
@@ -190,7 +194,9 @@ func (state *GameState) newRound() {
 	state.dropInactivePlayers(true, false)
 
 	// Check if multiple players are still playing
-	if state.Round > 0 {
+	if state.Round == 0 {
+		state.GamesPlayed++
+	} else if state.Round > 0 {
 		playersLeft := 0
 		for _, player := range state.Players {
 			if player.Status == STATUS_PLAYING {
@@ -212,6 +218,8 @@ func (state *GameState) newRound() {
 
 	// Clear community cards and pot at start of a new hand
 	if state.Round == 1 {
+		state.Winner = ""
+		state.RoundName = "Pre-flop"
 		state.Pot = 0
 		state.gameOver = false
 		state.CommunityCards = []card{}
@@ -250,7 +258,7 @@ func (state *GameState) newRound() {
 
 			// Reset player status
 			player.Status = STATUS_PLAYING
-			player.cards = []card{} // Clear cards for new hand
+			player.Hand = []card{} // Clear cards for new hand
 			player.Bet = 0 // Clear bets for new hand
 		}
 
@@ -279,8 +287,8 @@ func (state *GameState) newRound() {
 			for i := 0; i < len(state.Players); i++ {
 				player := &state.Players[i]
 				if player.Status == STATUS_PLAYING {
-					player.cards = append(player.cards, state.deck[state.deckIndex])
-					state.deckIndex++
+					state.Players[i].Hand = []card{state.deck[state.deckIndex], state.deck[state.deckIndex+1]}
+					state.deckIndex += 2
 				}
 			}
 		}
@@ -329,7 +337,7 @@ func (state *GameState) getPlayerWithBestVisibleHand(highHand bool) int {
 	for i := 0; i < len(state.Players); i++ {
 		player := &state.Players[i]
 		if player.Status == STATUS_PLAYING {
-			rank := getRank(player.cards, state.CommunityCards)
+			rank := getRank(player.Hand, state.CommunityCards)
 
 			// Add player number to start of rank to hold on to when sorting
 			rank = append([]int{i}, rank...)
@@ -391,7 +399,7 @@ func (state *GameState) addPlayer(playerName string, isBot bool) {
 		Name:   playerName,
 		Status: 0,
 		Purse:  STARTING_PURSE,
-		cards:  []card{},
+		Hand:   []card{},
 		isBot:  isBot,
 	}
 
@@ -453,8 +461,8 @@ func (state *GameState) endGame(abortGame bool) {
 			remainingPlayers = append(remainingPlayers, index)
 			hand := ""
 			// Loop through and build hand string
-			for _, card := range player.cards {
-				hand += valueLookup[card.value] + suitLookup[card.suit]
+			for _, card := range player.Hand {
+				hand += valueLookup[card.Rank] + suitLookup[card.Suit]
 			}
 			pockets = append(pockets, cardrank.Must(hand))
 		}
@@ -502,6 +510,7 @@ func (state *GameState) endGame(abortGame bool) {
 		state.wonByFolds = true
 		result += " won by default"
 	}
+	state.Winner = result
 	state.LastResult = result
 
 	state.moveExpires = time.Now().Add(ENDGAME_TIME_LIMIT)
@@ -512,7 +521,6 @@ func (state *GameState) endGame(abortGame bool) {
 // Emulates simplified player/logic for 5 card stud
 func (state *GameState) RunGameLogic() {
 	log.Printf("DEBUG: RunGameLogic called. ActivePlayer: %d, Round: %d\n", state.ActivePlayer, state.Round)
-	state.playerPing()
 
 	// We can't play a game until there are at least 2 players
 	if len(state.Players) < 2 {
@@ -590,7 +598,7 @@ func (state *GameState) RunGameLogic() {
 	log.Printf("DEBUG: Player %d Status: %d\n", state.ActivePlayer, state.Players[state.ActivePlayer].Status)
 	if state.Players[state.ActivePlayer].Status == STATUS_PLAYING {
 		log.Printf("DEBUG: Inside STATUS_PLAYING block for Player %d\n", state.ActivePlayer)
-		cards := state.Players[state.ActivePlayer].cards
+		cards := state.Players[state.ActivePlayer].Hand
 		moves := state.getValidMoves()
 
 		// Default to FOLD
@@ -614,9 +622,9 @@ func (state *GameState) RunGameLogic() {
 				// Check for strong starting hands (e.g., high pairs, suited connectors, high cards)
 				// This part needs more detailed logic based on hole cards only.
 				// For now, let's just make it play somewhat aggressively with good cards.
-				if (cards[0].value == cards[1].value && cards[0].value >= 8) || // Pairs 8s+
-					(cards[0].value >= 10 && cards[1].value >= 10) || // Two high cards (TJ+)
-					(cards[0].suit == cards[1].suit && cards[0].value >= 7 && cards[1].value >= 7) { // Suited connectors 7+
+				if (cards[0].Rank == cards[1].Rank && cards[0].Rank >= 8) || // Pairs 8s+
+					(cards[0].Rank >= 10 && cards[1].Rank >= 10) || // Two high cards (TJ+)
+					(cards[0].Suit == cards[1].Suit && cards[0].Rank >= 7 && cards[1].Rank >= 7) { // Suited connectors 7+
 					// Try to raise or call
 					if len(moves) > 2 && rand.Intn(2) == 0 { // 50% chance to raise if possible
 						choice = len(moves) - 1 // Take the highest available bet/raise
@@ -663,16 +671,21 @@ func (state *GameState) RunGameLogic() {
 			if state.Round == 1 && !state.wonByFolds { // Pre-flop -> Flop
 				state.dealCommunityCards(3)
 				state.Round++
+				state.RoundName = "Flop"
 				state.resetPlayersForNewBettingRound()
 			} else if state.Round == 2 && !state.wonByFolds { // Flop -> Turn
 				state.dealCommunityCards(1)
 				state.Round++
+				state.RoundName = "Turn"
 				state.resetPlayersForNewBettingRound()
 			} else if state.Round == 3 && !state.wonByFolds { // Turn -> River
 				state.dealCommunityCards(1)
 				state.Round++
+				state.RoundName = "River"
 				state.resetPlayersForNewBettingRound()
 			} else { // River -> Showdown/End Game
+				state.Round++
+				state.RoundName = "Showdown"
 				state.endGame(false)
 			}
 			return // Return after advancing round
@@ -756,6 +769,9 @@ func (state *GameState) clientLeave() {
 
 // Update player's ping timestamp. If a player doesn't ping in a certain amount of time, they will be dropped from the server.
 func (state *GameState) playerPing() {
+	if state.clientPlayer < 0 || state.clientPlayer >= len(state.Players) {
+		return // Not in a valid player context to ping
+	}
 	state.Players[state.clientPlayer].lastPing = time.Now()
 }
 
@@ -967,21 +983,12 @@ func (state *GameState) createClientState() *GameState {
 		}
 
 		player := statePlayers[playerIndex]
-		player.Hand = ""
 
-		switch player.Status {
-		case STATUS_PLAYING:
-			// For Texas Hold'em, only the player's own hole cards are visible.
-			// Opponents' hole cards are always masked.
-			if playerIndex == state.clientPlayer {
-				for _, card := range player.cards {
-					player.Hand += valueLookup[card.value] + suitLookup[card.suit]
-				}
-			} else {
-				player.Hand = "?? ??" // Mask opponent's two hole cards
+		// If the client is a player (not an observer) and this is not the client's player, mask the hand.
+		if state.clientPlayer != -1 && playerIndex != state.clientPlayer {
+			if len(player.Hand) > 0 {
+				player.Hand = make([]card, len(player.Hand))
 			}
-		case STATUS_FOLDED:
-			player.Hand = "??"
 		}
 
 		// Add this player to the copy of the state going out
@@ -1025,7 +1032,7 @@ func (state *GameState) updateLobby() {
 	humanPlayerSlots, humanPlayerCount := state.getHumanPlayerCountInfo()
 
 	// Send the total human slots / players to the Lobby
-	sendStateToLobby(humanPlayerSlots, humanPlayerCount, true, state.serverName, "?table="+state.table)
+	sendStateToLobby(humanPlayerSlots, humanPlayerCount, true, state.serverName, "?table="+state.TableId)
 }
 
 // Return number of active human players in the table, for the lobby
@@ -1067,7 +1074,7 @@ func getRank(holeCards []card, communityCards []card) []int {
 	// Convert custom card struct to cardrank.Card
 	crCards := make([]cardrank.Card, len(allCards))
 	for i, c := range allCards {
-		crCards[i] = cardrank.New(cardrank.Rank(c.value), toCardrankSuit(c.suit))
+		crCards[i] = cardrank.New(cardrank.Rank(c.Rank), toCardrankSuit(c.Suit))
 	}
 
 	// Evaluate the hand using cardrank's TwoPlusTwo evaluator

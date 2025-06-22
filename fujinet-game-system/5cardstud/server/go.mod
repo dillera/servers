@@ -10,6 +10,8 @@ require github.com/mitchellh/hashstructure/v2 v2.0.2
 
 require github.com/cardrank/cardrank v0.16.5
 
+require github.com/gorilla/websocket v1.5.3
+
 require (
 	github.com/bytedance/sonic v1.8.0 // indirect
 	github.com/chenzhuoyu/base64x v0.0.0-20221115062448-fe3a3abad311 // indirect

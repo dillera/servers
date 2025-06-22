@@ -11,7 +11,7 @@ func TestBotAI(t *testing.T) {
 
 	state := &GameState{
 		Players: []Player{
-			{Name: "Bot1", isBot: true, Status: STATUS_PLAYING, Purse: 1000, cards: []card{{value: 12, suit: 0}, {value: 11, suit: 1}}}, // Ace, King
+			{Name: "Bot1", isBot: true, Status: STATUS_PLAYING, Purse: 1000, Hand: []card{{Rank: 12, Suit: 0}, {Rank: 11, Suit: 1}}}, // Ace, King
 			{Name: "Player2", isBot: false, Status: STATUS_PLAYING, Purse: 1000},
 		},
 		ActivePlayer: 0,
@@ -30,13 +30,13 @@ func TestBotAI(t *testing.T) {
 	// Test post-flop scenario with a strong hand
 	state = &GameState{
 		Players: []Player{
-			{Name: "Bot1", isBot: true, Status: STATUS_PLAYING, Purse: 1000, cards: []card{{value: 12, suit: 0}, {value: 12, suit: 1}}}, // Pair of Aces
+			{Name: "Bot1", isBot: true, Status: STATUS_PLAYING, Purse: 1000, Hand: []card{{Rank: 12, Suit: 0}, {Rank: 12, Suit: 1}}}, // Pair of Aces
 			{Name: "Player2", isBot: false, Status: STATUS_PLAYING, Purse: 1000},
 		},
 		ActivePlayer:   0,
 		currentBet:     50,
 		Round:          2, // Flop
-		CommunityCards: []card{{value: 12, suit: 2}, {value: 5, suit: 0}, {value: 4, suit: 1}}, // Ace, 7, 6
+		CommunityCards: []card{{Rank: 12, Suit: 2}, {Rank: 5, Suit: 0}, {Rank: 4, Suit: 1}}, // Ace, 7, 6
 	}
 
 	state.RunGameLogic()

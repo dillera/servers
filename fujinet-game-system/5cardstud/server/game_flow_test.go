@@ -15,8 +15,8 @@ func TestTexasHoldemGameFlow(t *testing.T) {
 	state.Players[1].isBot = false
 
 	// Initialize game state (some fields are set by createGameState)
-	state.Players[0].cards = make([]card, 2)
-	state.Players[1].cards = make([]card, 2)
+	state.Players[0].Hand = make([]card, 2)
+	state.Players[1].Hand = make([]card, 2)
 	state.moveExpires = time.Now() // Set move expiration to now for immediate processing in tests
 	state.Round = 0 // Pre-game setup
 	state.Pot = 0
@@ -25,13 +25,13 @@ func TestTexasHoldemGameFlow(t *testing.T) {
 	state.newRound() // Initialize the first round, dealing cards and setting blinds
 
 	// Deal initial cards (simplified for test, normally handled by game start)
-	state.Players[0].cards[0] = state.deck[state.deckIndex]
+	state.Players[0].Hand[0] = state.deck[state.deckIndex]
 	state.deckIndex++
-	state.Players[0].cards[1] = state.deck[state.deckIndex]
+	state.Players[0].Hand[1] = state.deck[state.deckIndex]
 	state.deckIndex++
-	state.Players[1].cards[0] = state.deck[state.deckIndex]
+	state.Players[1].Hand[0] = state.deck[state.deckIndex]
 	state.deckIndex++
-	state.Players[1].cards[1] = state.deck[state.deckIndex]
+	state.Players[1].Hand[1] = state.deck[state.deckIndex]
 	state.deckIndex++
 
 	// Simulate game progression through rounds

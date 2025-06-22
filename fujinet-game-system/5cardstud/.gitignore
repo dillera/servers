@@ -1,0 +1,9 @@
+# Binaries
+/server/fujinet-server
+/server/poker_server
+
+# Log files
+/server/*.log
+
+# IDE files
+/server/*.code-workspace
