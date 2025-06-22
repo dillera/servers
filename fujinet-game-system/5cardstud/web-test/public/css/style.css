@@ -1,0 +1,104 @@
+body {
+    font-family: Arial, sans-serif;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    margin: 20px;
+    background-color: #f0f0f0;
+}
+
+h1 {
+    color: #333;
+}
+
+#game-container {
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+    width: 90%;
+    max-width: 1200px;
+    background-color: #fff;
+    padding: 20px;
+    border-radius: 8px;
+    box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
+}
+
+#community-cards, #players-container, #game-info {
+    border: 1px solid #ddd;
+    padding: 15px;
+    border-radius: 5px;
+    background-color: #fafafa;
+}
+
+#players-container {
+    display: flex;
+    justify-content: space-around;
+    gap: 20px;
+}
+
+.player-area {
+    border: 1px solid #ccc;
+    padding: 10px;
+    border-radius: 5px;
+    flex: 1;
+    min-width: 300px;
+}
+
+.human-player {
+    background-color: #e6ffe6;
+}
+
+.card-display {
+    display: flex;
+    gap: 5px;
+    min-height: 50px; /* To reserve space for cards */
+    border: 1px dashed #eee;
+    padding: 5px;
+    margin-top: 10px;
+}
+
+.player-actions {
+    margin-top: 15px;
+    display: flex;
+    gap: 10px;
+    align-items: center;
+}
+
+.action-button {
+    padding: 8px 15px;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    background-color: #007bff;
+    color: white;
+}
+
+.action-button:hover {
+    background-color: #0056b3;
+}
+
+.bet-amount {
+    padding: 7px;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+    width: 80px;
+}
+
+/* Basic card styling (will be replaced by actual card images/SVGs later) */
+.card {
+    width: 40px;
+    height: 60px;
+    border: 1px solid #333;
+    border-radius: 4px;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    font-weight: bold;
+    background-color: #fff;
+    box-shadow: 1px 1px 3px rgba(0,0,0,0.2);
+}
+
+.card.hidden {
+    background-color: #666;
+    color: #666;
+}

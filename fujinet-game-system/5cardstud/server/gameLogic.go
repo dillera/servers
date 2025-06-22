@@ -72,6 +72,17 @@ var moveLookup = map[string]string{
 
 var botNames = []string{"Clyd", "Jim", "Kirk", "Hulk", "Fry", "Meg", "Grif", "GPT"}
 
+var botProfiles = map[string]BotProfile{
+	"Clyd BOT":   {Name: "Tight-Aggressive", VPIP: 0.20, PFR: 0.80, BluffFrequency: 0.10},
+	"Jim BOT":    {Name: "Loose-Passive", VPIP: 0.60, PFR: 0.10, BluffFrequency: 0.05},
+	"Kirk BOT":   {Name: "The Rock", VPIP: 0.10, PFR: 0.50, BluffFrequency: 0.01},
+	"Hulk BOT":   {Name: "The Maniac", VPIP: 0.80, PFR: 0.70, BluffFrequency: 0.40},
+	"Fry BOT":    {Name: "Calling Station", VPIP: 0.70, PFR: 0.05, BluffFrequency: 0.02},
+	"Meg BOT":    {Name: "Balanced", VPIP: 0.35, PFR: 0.60, BluffFrequency: 0.15},
+	"Grif BOT":   {Name: "The Bluffer", VPIP: 0.40, PFR: 0.50, BluffFrequency: 0.50},
+	"GPT BOT":    {Name: "GTO Pro", VPIP: 0.25, PFR: 0.75, BluffFrequency: 0.20},
+}
+
 // For simplicity on the 8bit side (using switch statement), using a single character for each key.
 // DOUBLE CHECK that letter isn't already in use on the object!
 // Double characters are used for the list objects (validMoves and players)
@@ -95,18 +106,27 @@ const (
 	STATUS_LEFT    Status = 3
 )
 
+// BotProfile defines the playing style of a bot.
+type BotProfile struct {
+	Name           string
+	VPIP           float64 // Voluntarily Puts In Pot: How often the bot chooses to play a hand (0-1).
+	PFR            float64 // Pre-Flop Raise: How often the bot raises pre-flop when they do play (0-1).
+	BluffFrequency float64 // How often the bot will try to bluff (0-1).
+}
+
 type Player struct {
-	Name   string `json:"Name"`
-	Status Status `json:"Status"`
-	Bet    int    `json:"Bet"`
-	Move   string `json:"Move"`
-	Purse  int    `json:"Purse"`
-	Hand   []card `json:"Hand"`
+	Name    string `json:"Name"`
+	Status  Status `json:"Status"`
+	Bet     int    `json:"Bet"`
+	Move    string `json:"Move"`
+	Purse   int    `json:"Purse"`
+	Hand    []card `json:"Hand"`
 	IsHuman bool   `json:"IsHuman"`
 
 	// Internal
 	isBot    bool
 	lastPing time.Time
+	profile  BotProfile
 }
 
 type GameState struct {
@@ -394,16 +414,22 @@ func (state *GameState) resetPlayersForNewBettingRound() {
 }
 
 func (state *GameState) addPlayer(playerName string, isBot bool) {
-
-	newPlayer := Player{
-		Name:   playerName,
-		Status: 0,
-		Purse:  STARTING_PURSE,
-		Hand:   []card{},
-		isBot:  isBot,
+	player := Player{
+		Name:     playerName,
+		Status:   STATUS_WAITING,
+		Purse:    STARTING_PURSE,
+		isBot:    isBot,
+		lastPing: time.Now(),
 	}
-
-	state.Players = append(state.Players, newPlayer)
+	if isBot {
+		if profile, ok := botProfiles[playerName]; ok {
+			player.profile = profile
+		} else {
+			// Default profile if not found
+			player.profile = BotProfile{Name: "Default", VPIP: 0.3, PFR: 0.3, BluffFrequency: 0.1}
+		}
+	}
+	state.Players = append(state.Players, player)
 }
 
 func (state *GameState) setClientPlayerByName(playerName string) {
@@ -598,58 +624,25 @@ func (state *GameState) RunGameLogic() {
 	log.Printf("DEBUG: Player %d Status: %d\n", state.ActivePlayer, state.Players[state.ActivePlayer].Status)
 	if state.Players[state.ActivePlayer].Status == STATUS_PLAYING {
 		log.Printf("DEBUG: Inside STATUS_PLAYING block for Player %d\n", state.ActivePlayer)
-		cards := state.Players[state.ActivePlayer].Hand
-		moves := state.getValidMoves()
 
-		// Default to FOLD
-		choice := 0
-
-		// Never fold if CHECK is an option. This applies to forced player moves as well as bots
-		if len(moves) > 1 && moves[1].Move == "CH" {
-			choice = 1
-		}
-
-		// If this is a bot, pick the best move using some simple logic (sometimes random)
+		move := ""
 		if state.Players[state.ActivePlayer].isBot {
-			// rank := getRank(cards, state.CommunityCards)
-			// bestHandRank := rank[0] // Assuming getRank returns a single integer rank from cardrank
-
-			// Simple AI logic for Texas Hold'em
-			// This is a very basic AI and can be greatly improved.
-
-			// Pre-flop strategy (Round 1)
-			if state.Round == 1 {
-				// Check for strong starting hands (e.g., high pairs, suited connectors, high cards)
-				// This part needs more detailed logic based on hole cards only.
-				// For now, let's just make it play somewhat aggressively with good cards.
-				if (cards[0].Rank == cards[1].Rank && cards[0].Rank >= 8) || // Pairs 8s+
-					(cards[0].Rank >= 10 && cards[1].Rank >= 10) || // Two high cards (TJ+)
-					(cards[0].Suit == cards[1].Suit && cards[0].Rank >= 7 && cards[1].Rank >= 7) { // Suited connectors 7+
-					// Try to raise or call
-					if len(moves) > 2 && rand.Intn(2) == 0 { // 50% chance to raise if possible
-						choice = len(moves) - 1 // Take the highest available bet/raise
-					} else if len(moves) > 1 { // Otherwise call or check
-						choice = 1
-					}
-				} else if state.currentBet == 0 && slices.ContainsFunc(moves, func(m validMove) bool { return m.Move == "CH" }) { // If no bet, check
-					choice = slices.IndexFunc(moves, func(m validMove) bool { return m.Move == "CH" })
-				} else {
-					choice = 0 // Fold
-				}
-			} else { // Rounds 2, 3, 4 (Flop, Turn, River)
-				// Simple post-flop strategy: Check if possible, otherwise call if affordable, else fold.
-				if state.currentBet == 0 && slices.ContainsFunc(moves, func(m validMove) bool { return m.Move == "CH" }) {
-					choice = slices.IndexFunc(moves, func(m validMove) bool { return m.Move == "CH" })
-				} else if state.currentBet > 0 && len(moves) > 1 && slices.ContainsFunc(moves, func(m validMove) bool { return strings.HasPrefix(m.Move, "CALL") }) { // Check if CALL is an option
-					choice = slices.IndexFunc(moves, func(m validMove) bool { return strings.HasPrefix(m.Move, "CALL") }) // Find the index of CALL
-				} else {
-					choice = 0 // Fold
-				}
+			move = state.getBotMove()
+		} else {
+			// This part is for human players, which is not implemented yet.
+			// For now, we'll just make it fold.
+			moves := state.getValidMoves()
+			if len(moves) > 0 {
+				move = moves[0].Move // Default to FOLD
 			}
 		}
+
 		// Apply the chosen move
-		log.Printf("DEBUG: Player %d chose move: %s (choice index: %d)\n", state.ActivePlayer, moves[choice].Move, choice)
-		state.performMove(moves[choice].Move, true)
+		if move != "" {
+			log.Printf("DEBUG: Player %d chose move: %s\n", state.ActivePlayer, move)
+			state.performMove(move, true)
+		}
+
 
 		// Check for round advancement after a player has made a move
 		allPlayersMovedAndMatchedBet := true
@@ -691,6 +684,131 @@ func (state *GameState) RunGameLogic() {
 			return // Return after advancing round
 		}
 	}
+}
+
+// getStartingHandStrength evaluates the quality of a two-card Texas Hold'em starting hand.
+// Returns a score from 0 to 10, where 10 is the best.
+func getStartingHandStrength(cards []card) int {
+	if len(cards) != 2 {
+		return 0
+	}
+	c1 := cards[0]
+	c2 := cards[1]
+
+	// Ensure c1 is the higher rank card
+	if c1.Rank < c2.Rank {
+		c1, c2 = c2, c1
+	}
+
+	isPair := c1.Rank == c2.Rank
+	isSuited := c1.Suit == c2.Suit
+	gap := c1.Rank - c2.Rank
+
+	// Pocket Pairs
+	if isPair {
+		if c1.Rank >= 12 { return 10 } // AA, KK, QQ
+		if c1.Rank >= 9 { return 9 }  // JJ, TT, 99
+		if c1.Rank >= 6 { return 8 }  // 88, 77, 66
+		return 7 // 55, 44, 33, 22
+	}
+
+	// Suited High Cards
+	if isSuited {
+		if c1.Rank >= 13 && c2.Rank >= 11 { return 9 } // AKs, AQs, AJs, KQs
+		if c1.Rank >= 13 { return 8 } // ATs, A9s...
+		if c1.Rank >= 11 && c2.Rank >= 9 { return 7 } // KJs, KTs, QJs, QTs, JTs
+	}
+
+	// Unsuited High Cards
+	if c1.Rank >= 13 && c2.Rank >= 12 { return 7 } // AKo, AQo
+	if c1.Rank >= 13 && c2.Rank >= 10 { return 6 } // AJo, ATo
+	if c1.Rank >= 12 && c2.Rank >= 11 { return 6 } // KQo, KJo
+
+	// Suited Connectors
+	if isSuited && gap == 1 {
+		if c1.Rank >= 9 { return 6 } // T9s, 98s, 87s
+		return 5 // 76s, 65s, 54s
+	}
+
+	// Suited Gappers
+	if isSuited && gap > 1 && gap <= 3 {
+		return 4
+	}
+
+	// Anything else
+	return 1
+}
+
+func (state *GameState) getBotMove() string {
+	log.Printf("DEBUG: getBotMove called for player %s", state.Players[state.ActivePlayer].Name)
+	player := state.Players[state.ActivePlayer]
+	profile := player.profile
+	moves := state.getValidMoves()
+
+	// If no moves are possible, do nothing.
+	if len(moves) == 0 {
+		return ""
+	}
+
+	// Pre-flop strategy
+	if state.Round == 1 {
+		handStrength := getStartingHandStrength(player.Hand)
+		log.Printf("DEBUG: Player %s is pre-flop with hand strength %d", player.Name, handStrength)
+
+		// VPIP check: Decide if the hand is strong enough to play based on VPIP.
+		// A lower VPIP means the bot is tighter and requires a stronger hand.
+		// We'll map VPIP (0.1-0.8) to a required hand strength (10-1).
+		requiredStrength := int(11 - (profile.VPIP * 10))
+		if handStrength < requiredStrength {
+			// If a bet is required to stay in, fold.
+			if state.currentBet > player.Bet {
+				return "FO" // Fold
+			}
+		}
+
+		// PFR check: Decide whether to raise pre-flop.
+		// A higher PFR means the bot is more aggressive.
+		// We'll use PFR as a probability to raise with strong hands.
+		canRaise := slices.ContainsFunc(moves, func(m validMove) bool { return m.Move == "RA" })
+		if canRaise && handStrength >= 8 && rand.Float64() < profile.PFR {
+			return "RA" // Raise
+		}
+
+		// Bluffing check
+		canRaiseOrBet := slices.ContainsFunc(moves, func(m validMove) bool { return m.Move == "RA" || m.Move == "BL" })
+		if canRaiseOrBet && rand.Float64() < profile.BluffFrequency {
+			// On a bluff, make a standard bet or raise
+			if canRaise {
+				return "RA"
+			}
+			return "BL"
+		}
+	} else { // Post-flop strategy
+		// For now, let's keep the post-flop logic simple.
+		// We'll enhance this later.
+		rank := getRank(player.Hand, state.CommunityCards)
+		log.Printf("DEBUG: Player %s is post-flop with hand rank %v", player.Name, rank)
+		handStrength := rank[0] // Using the cardrank library's evaluation
+
+		// If hand is two-pair or better, be aggressive.
+		if handStrength >= 2 {
+			if slices.ContainsFunc(moves, func(m validMove) bool { return m.Move == "RA" }) {
+				return "RA"
+			}
+			if slices.ContainsFunc(moves, func(m validMove) bool { return m.Move == "BL" }) {
+				return "BL"
+			}
+		}
+	}
+
+	// Default Action: Check if possible, otherwise Call if possible, otherwise Fold.
+	if slices.ContainsFunc(moves, func(m validMove) bool { return m.Move == "CH" }) {
+		return "CH"
+	}
+	if slices.ContainsFunc(moves, func(m validMove) bool { return strings.HasPrefix(m.Move, "CA") }) {
+		return moves[slices.IndexFunc(moves, func(m validMove) bool { return strings.HasPrefix(m.Move, "CA") })].Move
+	}
+	return "FO"
 }
 
 	// Drop players that left or have not pinged within the expected timeout

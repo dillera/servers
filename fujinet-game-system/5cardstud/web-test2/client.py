@@ -94,16 +94,15 @@ def on_open(ws):
 def main():
     print("Attempting to connect to server...")
     # Add a delay to give the server time to start up
-    time.sleep(1)
-
-    # websocket.enableTrace(True) # Detailed WebSocket logging is now disabled
-    ws = websocket.WebSocketApp(WEBSOCKET_URL,
-                              on_open=on_open,
-                              on_message=on_message,
-                              on_error=on_error,
-                              on_close=on_close)
+    time.sleep(5)
 
     while True:
+        # websocket.enableTrace(True) # Detailed WebSocket logging can be enabled for debugging
+        ws = websocket.WebSocketApp(WEBSOCKET_URL,
+                                  on_open=on_open,
+                                  on_message=on_message,
+                                  on_error=on_error,
+                                  on_close=on_close)
         ws.run_forever()
         print("--- WebSocket connection closed. Reconnecting in 5 seconds... ---")
         time.sleep(5)
