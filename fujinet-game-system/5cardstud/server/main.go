@@ -1,6 +1,7 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"log"
 	"os"
@@ -17,8 +18,12 @@ import (
 // A mutex is used so a given table can only be accessed by a single request at a time
 var stateMap sync.Map
 var tables []GameTable = []GameTable{}
+var runningHubs sync.Map
 
 var tableMutex KeyedMutex
+
+var debugMode bool
+var disableLobby bool
 
 type KeyedMutex struct {
 	mutexes sync.Map // Zero value is empty and ready for use
@@ -35,12 +40,18 @@ func (m *KeyedMutex) Lock(key string) func() {
 func main() {
 	log.Print("Starting server...")
 
+	flag.BoolVar(&debugMode, "debug", false, "Enable debug logging for requests and responses")
+	flag.BoolVar(&disableLobby, "disable-lobby", false, "Disable lobby communication")
+	flag.Parse()
+
 	// Set environment flags
-	UpdateLobby = os.Getenv("GO_PROD") == "1"
+	UpdateLobby = os.Getenv("GO_PROD") == "1" && !disableLobby
 
 	if UpdateLobby {
 		log.Printf("This instance will update the lobby at " + LOBBY_ENDPOINT_UPSERT)
 		gin.SetMode(gin.ReleaseMode)
+	} else {
+		log.Println("Lobby communication is disabled.")
 	}
 
 	// Determine port for HTTP service.
@@ -67,20 +78,8 @@ func main() {
 	router.GET("/tables", apiTables)
 	router.GET("/updateLobby", apiUpdateLobby)
 
-	//	router.GET("/REFRESHLOBBY", apiRefresh)
-
 	initializeGameServer()
 	initializeTables()
-
-	// Load the main game state for the WebSocket hub
-	// We'll use the 7-player dev table for now
-	s, ok := stateMap.Load("dev7")
-	if !ok {
-		log.Fatal("Could not load game state for hub")
-	}
-	gameState := s.(*GameState)
-
-	go hub.run(gameState)
 
 	router.GET("/ws", func(c *gin.Context) {
 		serveWs(c.Writer, c.Request)
@@ -221,6 +220,8 @@ func apiUpdateLobby(c *gin.Context) {
 	serializeResults(c, "Lobby Updated")
 }
 
+
+
 // Gets the current game state for the specified table and adds the player id of the client to it
 func getState(c *gin.Context) (*GameState, func()) {
 	table := c.Query("table")
@@ -240,9 +241,16 @@ func getState(c *gin.Context) (*GameState, func()) {
 	var state *GameState
 
 	if ok {
-		stateCopy := *value.(*GameState)
-		state = &stateCopy
+		// IMPORTANT: Work directly with the pointer from the map, do not make a copy.
+		state = value.(*GameState)
 		state.setClientPlayerByName(player)
+
+		// Start the hub.run goroutine for this table if it's not already running.
+		// Pass the authoritative state pointer so the hub modifies the correct object.
+		if _, loaded := runningHubs.LoadOrStore(table, true); !loaded {
+			go hub.run(state, saveState)
+			log.Printf("Started game logic hub for table: %s", table)
+		}
 	}
 
 	return state, unlock

@@ -26,7 +26,7 @@ func newHub() *Hub {
 	}
 }
 
-func (h *Hub) run(state *GameState) {
+func (h *Hub) run(state *GameState, saveState func(*GameState)) {
 	ticker := time.NewTicker(2 * time.Second)
 	defer ticker.Stop()
 

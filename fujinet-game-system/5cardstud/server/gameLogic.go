@@ -279,7 +279,7 @@ func (state *GameState) newRound() {
 			// Reset player status
 			player.Status = STATUS_PLAYING
 			player.Hand = []card{} // Clear cards for new hand
-			player.Bet = 0 // Clear bets for new hand
+			player.Bet = 0        // Clear bets for new hand
 		}
 
 		// Reset player's last move/bet for this round
@@ -469,79 +469,91 @@ func (state *GameState) setClientPlayerByName(playerName string) {
 }
 
 func (state *GameState) endGame(abortGame bool) {
-	// The next request for /state will start a new game
-
-	// Hand rank details
-	// Rank: SF, 4K, FH, F, S, 3K, 2P, 1P, HC
-
 	state.gameOver = true
 	state.ActivePlayer = -1
-	state.Round = 5
+	state.Round = 5 // Signifies end of game
 
-	remainingPlayers := []int{}
-	pockets := [][]cardrank.Card{}
+	// Collect all bets into the pot
+	for i := range state.Players {
+		state.Pot += state.Players[i].Bet
+		state.Players[i].Bet = 0
+	}
 
-	for index, player := range state.Players {
-		state.Pot += player.Bet
-		if !abortGame && player.Status == STATUS_PLAYING {
-			remainingPlayers = append(remainingPlayers, index)
+	// Find players still in the hand
+	playersInHandIndices := []int{}
+	for i, p := range state.Players {
+		if p.Status == STATUS_PLAYING {
+			playersInHandIndices = append(playersInHandIndices, i)
+		}
+	}
+
+	var result string
+
+	// Case 1: Only one player left, they win by default.
+	if !abortGame && len(playersInHandIndices) == 1 {
+		winnerIndex := playersInHandIndices[0]
+		winner := &state.Players[winnerIndex]
+		winner.Purse += state.Pot
+		result = fmt.Sprintf("%s won by default", winner.Name)
+		state.wonByFolds = true
+	} else if !abortGame && len(playersInHandIndices) > 1 {
+		// Case 2: Showdown. Multiple players left.
+		state.wonByFolds = false
+
+		board := ""
+		for _, card := range state.CommunityCards {
+			board += valueLookup[card.Rank] + suitLookup[card.Suit]
+		}
+		boardCards := cardrank.Must(board)
+
+		pockets := [][]cardrank.Card{}
+		playerMap := []int{} // map index in pockets back to state.Players index
+		for _, playerIndex := range playersInHandIndices {
+			player := state.Players[playerIndex]
 			hand := ""
-			// Loop through and build hand string
 			for _, card := range player.Hand {
 				hand += valueLookup[card.Rank] + suitLookup[card.Suit]
 			}
 			pockets = append(pockets, cardrank.Must(hand))
+			playerMap = append(playerMap, playerIndex)
 		}
-	}
 
-	evs := cardrank.StudFive.EvalPockets(pockets, nil)
-	order, pivot := cardrank.Order(evs, false)
+		// Use Texas Hold'em evaluator
+		evs := cardrank.Holdem.EvalPockets(pockets, boardCards)
+		order, pivot := cardrank.Order(evs, false)
 
-	if pivot == 0 {
-		// If nobody won, the game was aborted. Display the waiting message if this
-		// server does not contains bots.
+		if pivot > 0 {
+			perPlayerWinnings := state.Pot / pivot
+			winners := []string{}
+			for i := 0; i < pivot; i++ {
+				winnerIndex := playerMap[order[i]]
+				player := &state.Players[winnerIndex]
+				player.Purse += perPlayerWinnings
+				winners = append(winners, player.Name)
+			}
+			result = fmt.Sprintf("%s won with %s", strings.Join(winners, " and "), evs[order[0]].Desc(true))
+			result = strings.Split(result, " [")[0] // Clean up description
+		} else {
+			result = "No winner could be determined in showdown."
+		}
+
+	} else {
+		// Case 3: No players left in hand or game aborted.
 		humanAvailSlots, _ := state.getHumanPlayerCountInfo()
 		if humanAvailSlots == 8 {
-			state.LastResult = WAITING_MESSAGE
-			state.moveExpires = time.Now().Add(ENDGAME_TIME_LIMIT)
+			result = WAITING_MESSAGE
 		} else {
-			state.moveExpires = time.Now()
+			result = "Game ended. Ready for new hand."
 		}
-		return
 	}
 
-	// Int divide, so "house" takes remainder
-	perPlayerWinnings := state.Pot / pivot
-
-	result := ""
-
-	for i := 0; i < pivot; i++ {
-		player := &state.Players[remainingPlayers[order[i]]]
-
-		// Award winnings to player's purse
-		player.Purse += int(perPlayerWinnings)
-
-		// Add player's name to result
-		if result != "" {
-			result += " and "
-		}
-		result += player.Name
-	}
-
-	if len(remainingPlayers) > 1 {
-		state.wonByFolds = false
-		result += strings.Join(strings.Split(strings.Split(fmt.Sprintf(" won with %s", evs[order[0]]), " [")[0], ",")[0:2], ",")
-		result = strings.ReplaceAll(result, "kickers", "kicker")
-	} else {
-		state.wonByFolds = true
-		result += " won by default"
-	}
 	state.Winner = result
 	state.LastResult = result
-
-	state.moveExpires = time.Now().Add(ENDGAME_TIME_LIMIT)
-
 	log.Println(result)
+
+	// Set timer for starting the next hand
+	// Always set a delay before the next round starts to allow players to see the result.
+	state.moveExpires = time.Now().Add(ENDGAME_TIME_LIMIT)
 }
 
 // Emulates simplified player/logic for 5 card stud
@@ -599,6 +611,9 @@ func (state *GameState) RunGameLogic() {
 
 	// Return if the move timer has not expired
 	// Check timer if no active player, or the active player hasn't already left
+	if state.ActivePlayer > -1 {
+		log.Printf("DEBUG: Checking timer for Player %d. Expires at: %v, Remaining: %v", state.ActivePlayer, state.moveExpires.Format(time.RFC3339), time.Until(state.moveExpires))
+	}
 	if state.ActivePlayer == -1 || state.Players[state.ActivePlayer].Status != STATUS_LEFT {
 		moveTimeRemaining := int(time.Until(state.moveExpires).Seconds())
 		if moveTimeRemaining > 0 {
@@ -784,20 +799,18 @@ func (state *GameState) getBotMove() string {
 			return "BL"
 		}
 	} else { // Post-flop strategy
-		// For now, let's keep the post-flop logic simple.
-		// We'll enhance this later.
-		rank := getRank(player.Hand, state.CommunityCards)
-		log.Printf("DEBUG: Player %s is post-flop with hand rank %v", player.Name, rank)
-		handStrength := rank[0] // Using the cardrank library's evaluation
+		// WORKAROUND: The getRank function is causing a server crash due to issues with the cardrank library.
+		// To ensure stability for testing, post-flop logic is temporarily simplified to check/fold.
+		log.Printf("DEBUG: Player %s is post-flop. Using simplified check/fold AI.", player.Name)
 
-		// If hand is two-pair or better, be aggressive.
-		if handStrength >= 2 {
-			if slices.ContainsFunc(moves, func(m validMove) bool { return m.Move == "RA" }) {
-				return "RA"
-			}
-			if slices.ContainsFunc(moves, func(m validMove) bool { return m.Move == "BL" }) {
-				return "BL"
-			}
+		canCheck := slices.ContainsFunc(moves, func(m validMove) bool { return m.Move == "CH" })
+		canFold := slices.ContainsFunc(moves, func(m validMove) bool { return m.Move == "FO" })
+
+		if canCheck {
+			return "CH" // Always check if possible
+		}
+		if canFold {
+			return "FO" // Fold if checking is not an option
 		}
 	}
 
@@ -1170,35 +1183,9 @@ func (state *GameState) getHumanPlayerCountInfo() (int, int) {
 }
 
 // Ranks hand as an array of large to small values representing sets of 4 or less. Intended for 4 visible cards or simple AI
-var twoPlusTwoEval = cardrank.NewTwoPlusTwoEval()
-
-func toCardrankSuit(suit int) cardrank.Suit {
-	switch suit {
-	case 0:
-		return cardrank.Spade
-	case 1:
-		return cardrank.Heart
-	case 2:
-		return cardrank.Diamond
-	case 3:
-		return cardrank.Club
-	}
-	return cardrank.InvalidSuit // Should not happen
-}
-
 func getRank(holeCards []card, communityCards []card) []int {
-	allCards := append(holeCards, communityCards...)
-
-	// Convert custom card struct to cardrank.Card
-	crCards := make([]cardrank.Card, len(allCards))
-	for i, c := range allCards {
-		crCards[i] = cardrank.New(cardrank.Rank(c.Rank), toCardrankSuit(c.Suit))
-	}
-
-	// Evaluate the hand using cardrank's TwoPlusTwo evaluator
-	rank := twoPlusTwoEval(crCards)
-
-	// The cardrank library returns an EvalRank. We need to convert this to an int slice.
-	// For now, we'll just return the integer value of the rank.
-	return []int{int(rank)}
+	// STUB: This function is currently disabled to prevent server crashes.
+	// The bot AI has been simplified to a check/fold strategy post-flop.
+	log.Printf("WARN: getRank function is a stub and should not be relied upon for bot decisions.")
+	return []int{0}
 }

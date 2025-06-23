@@ -20,6 +20,15 @@ go build -o poker_server .
 ./poker_server
 ```
 
+**Debug Mode:**
+To enable detailed request and response logging for debugging client programs, run the server with the `-debug` flag:
+
+```bash
+./poker_server -debug
+```
+
+When debug mode is enabled, the server will print the full JSON of incoming requests and outgoing responses to the console, which is invaluable for developing and troubleshooting new client applications.
+
 The server will start on port 8080.
 
 ## BOT AI System

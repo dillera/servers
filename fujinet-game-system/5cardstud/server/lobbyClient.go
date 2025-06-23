@@ -69,13 +69,15 @@ func sendStateToLobby(maxPlayers int, curPlayers int, isOnline bool, server stri
 
 	jsonPayload, err := json.Marshal(serverDetails)
 	if err != nil {
-		panic(err)
+		log.Println("Error marshalling lobby details:", err)
+		return
 	}
 	log.Printf("Updating Lobby: %s", jsonPayload)
 
 	request, err := http.NewRequest("POST", LOBBY_ENDPOINT_UPSERT, bytes.NewBuffer(jsonPayload))
 	if err != nil {
-		panic(err)
+		log.Println("Error creating lobby request:", err)
+		return
 	}
 	request.Header.Set("Content-Type", "application/json; charset=UTF-8")
 

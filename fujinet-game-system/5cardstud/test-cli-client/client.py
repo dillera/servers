@@ -1,111 +1,179 @@
 import websocket
 import json
 import time
-import os
+import requests
+import threading
+from inputimeout import inputimeout, TimeoutOccurred
 
-WEBSOCKET_URL = "ws://localhost:8080/ws"
+# Configuration
+SERVER_IP = "localhost"
+HTTP_PORT = "8080"
+WS_PORT = "8080"
+TABLE_ID = "dev1"
+PLAYER_NAME = "TestClient"
 
-# --- Card Formatting ---
+BASE_URL = f"http://{SERVER_IP}:{HTTP_PORT}"
+WEBSOCKET_URL = f"ws://{SERVER_IP}:{WS_PORT}/ws?table={TABLE_ID}&player={PLAYER_NAME}"
+
+# --- Global state to share between threads ---
+player_info = {"id": -1, "is_turn": False}
+last_state = {}
+
+def get_player_id(players):
+    """Find the player ID for our client."""
+    for i, player in enumerate(players):
+        if player.get('Name') == PLAYER_NAME:
+            return i
+    return -1
+
+def post_move(move):
+    """Sends the player's move to the server via HTTP POST."""
+    try:
+        url = f"{BASE_URL}/state?table={TABLE_ID}&player={PLAYER_NAME}"
+        headers = {'Content-Type': 'application/json'}
+        payload = {"move": move}
+        print(f"\n>>> Sending move: {move}")
+        response = requests.post(url, json=payload, headers=headers, timeout=3)
+        response.raise_for_status()
+    except requests.exceptions.RequestException as e:
+        print(f"Error sending move: {e}")
+
+def display_menu_and_get_input(state):
+    """Displays the move menu and captures user input with a timeout."""
+    global player_info
+    if not player_info['is_turn']:
+        return
+
+    valid_moves = state.get('ValidMoves', [])
+    move_time = state.get('MoveTime', 30)
+
+    print("\n--- It's your turn! ---")
+    for i, move in enumerate(valid_moves):
+        print(f"  {i + 1}: {move['n']}")
+    print("-------------------------")
+
+    try:
+        choice = inputimeout(prompt=f"Choose your move (1-{len(valid_moves)}) [{move_time}s]: ", timeout=move_time)
+        
+        choice_index = int(choice) - 1
+        if 0 <= choice_index < len(valid_moves):
+            selected_move = valid_moves[choice_index]['m']
+            post_move(selected_move)
+        else:
+            print("Invalid choice. Letting timer expire.")
+
+    except TimeoutOccurred:
+        print("\nNo input received. Letting server timeout the move.")
+    except (ValueError, IndexError):
+        print("Invalid input. Letting timer expire.")
+    finally:
+        player_info['is_turn'] = False # Prevent multiple inputs for the same turn
+
 def format_card(card):
-    """Formats a card dictionary into a human-readable string."""
+    """Formats a card dictionary into a string like 'As' or 'Th'."""
     if not card or 'Rank' not in card or 'Suit' not in card:
-        # Handle empty or malformed card data for folded players
-        return '??'
-    
-    ranks = {11: 'J', 12: 'Q', 13: 'K', 14: 'A'}
-    suits = {0: '♣', 1: '♦', 2: '♥', 3: '♠'}
-    
+        return "??"
+    ranks = {1: 'A', 2: '2', 3: '3', 4: '4', 5: '5', 6: '6', 7: '7', 8: '8', 9: '9', 10: 'T', 11: 'J', 12: 'Q', 13: 'K', 14: 'A'}
+    suits = {0: '♠', 1: '♥', 2: '♦', 3: '♣'}
+    # Ace can be high or low, server seems to use 14 for high
     rank_val = card['Rank']
-    suit_val = card['Suit']
-    
-    rank_str = ranks.get(rank_val, str(rank_val))
-    suit_str = suits.get(suit_val, '?')
-    
-    return f"{rank_str}{suit_str}"
+    if rank_val == 1: rank_val = 14 # Treat Ace as high for display
+    return ranks.get(rank_val, '?') + suits.get(card['Suit'], '?')
 
-def print_game_state(game_state):
-    """Clears the console and prints a formatted view of the game state."""
-    if not game_state:
-        return
+def print_game_state(state):
+    """Prints the game state in a human-readable format."""
+    games_played = state.get('gamesPlayed', 0)
+    round_num = state.get('Round', 0)
+    pot = state.get('Pot', 0)
+    community_cards = state.get('CommunityCards', [])
+    players = state.get('Players', [])
+    last_result = state.get('LastResult', '')
 
-    os.system('cls' if os.name == 'nt' else 'clear')
+    # A simple way to clear the screen
+    print("\033[H\033[J", end="")
 
-    games_played = game_state.get('gamesPlayed', 0)
-    round_num = game_state.get('Round', 0)
-    pot = game_state.get('Pot', 0)
-    current_bet = game_state.get('currentBet', 0)
-    community_cards = game_state.get('CommunityCards', [])
-    players = game_state.get('Players', [])
-    winner = game_state.get('Winner')
+    if last_result:
+        print(f"Last Result: {last_result}\n")
 
-    # A non-empty Winner string from the server indicates the previous game just ended.
-    # The round will be 0 as the server prepares for the next game.
-    if winner and round_num == 0:
-        print("\n--- GAME OVER ---")
-        print(f"Game #{games_played} Concluded")
-        print(f"Winner: {winner}\n")
-        # Return early to avoid printing the empty table for the next game.
-        return
-
-    round_name = game_state.get('roundName', f'Round {round_num}')
+    round_name = state.get('roundName', f'Round {round_num}')
     print(f"--- Texas Hold'em --- Game #{games_played} --- {round_name} ---")
-    
     community_str = " ".join(format_card(c) for c in community_cards) if community_cards else "Not dealt"
-    print(f"Pot: ${pot:<6} | Current Bet: ${current_bet:<6} | Community Cards: {community_str}")
+    print(f"Pot: ${pot:<6} | Community Cards: [ {community_str} ]")
     print("-" * 80)
-    print(f"{'Player':<15} {'Status':<12} {'Purse':<10} {'Bet':<10} {'Hand'}")
+    print(f"  {'Player':<15} {'Status':<12} {'Purse':<10} {'Bet':<10} {'Hand'}")
     print("-" * 80)
-
-    for player in players:
+    for i, player in enumerate(players):
         name = player.get('Name', 'Unknown')
-        status_map = {0: "Waiting", 1: "Playing", 2: "Folded", 3: "All-In"}
+        status_map = {0: "Waiting", 1: "Playing", 2: "Folded", 3: "All-In", 4: "Left"}
         status = status_map.get(player.get('Status'), "Unknown")
         purse = player.get('Purse', 0)
         bet = player.get('Bet', 0)
         hand = player.get('Hand', [])
         
-        hand_str = " ".join(format_card(c) for c in hand) if hand else "Hidden"
-        
-        print(f"{name:<15} {status:<12} ${purse:<9} ${bet:<9} {hand_str}")
+        # For testing, show all hands
+        hand_str = " ".join(format_card(c) for c in hand) if hand else ""
 
-# --- WebSocket Callbacks ---
+        active_marker = "->" if state.get('ActivePlayer') == i else "  "
+        print(f"{active_marker} {name:<15} {status:<12} ${purse:<9} ${bet:<9} {hand_str}")
+    print("-" * 80)
+
 def on_message(ws, message):
+    """Callback function to handle incoming messages from the WebSocket."""
+    global player_info, last_state
     try:
         message_data = json.loads(message)
-        if message_data.get('type') == 'gameState':
-            game_state = message_data.get('data')
-            print_game_state(game_state)
+        state = message_data.get('data', {})
+        if not state:
+            print(f"Received message without game state data: {message_data}")
+            return
+
+        last_state = state
+        print_game_state(state)
+
+        if player_info['id'] == -1:
+            player_info['id'] = get_player_id(state.get('Players', []))
+
+        active_player_id = state.get('ActivePlayer', -1)
+        if player_info['id'] != -1 and active_player_id == player_info['id']:
+            player_info['is_turn'] = True
         else:
-            print(f"--- Received Message: {message_data.get('type')} ---\n{message}")
+            player_info['is_turn'] = False
+
     except json.JSONDecodeError:
-        print(f"Error decoding JSON: {message}")
-    except Exception as e:
-        print(f"An error occurred in on_message: {e}")
+        print(f"Received non-JSON message: {message}")
 
 def on_error(ws, error):
-    print(f"### Error: {error} ###")
+    print(f"Error: {error}")
 
 def on_close(ws, close_status_code, close_msg):
-    print(f"### Closed: {close_status_code} - {close_msg} ###")
+    print(f"\n### Connection closed: {close_status_code} - {close_msg} ###")
 
 def on_open(ws):
-    print("--- Connection Opened ---")
+    print("WebSocket connection opened.")
 
-def main():
-    print("Attempting to connect to server...")
-    # Add a delay to give the server time to start up
-    time.sleep(5)
-
-    while True:
-        # websocket.enableTrace(True) # Detailed WebSocket logging can be enabled for debugging
-        ws = websocket.WebSocketApp(WEBSOCKET_URL,
-                                  on_open=on_open,
-                                  on_message=on_message,
-                                  on_error=on_error,
-                                  on_close=on_close)
-        ws.run_forever()
-        print("--- WebSocket connection closed. Reconnecting in 5 seconds... ---")
-        time.sleep(5)
+def run_websocket():
+    ws = websocket.WebSocketApp(WEBSOCKET_URL, on_open=on_open, on_message=on_message, on_error=on_error, on_close=on_close)
+    ws.run_forever()
 
 if __name__ == "__main__":
-    main()
+    # Initial HTTP request to join the table
+    try:
+        print(f"Joining table '{TABLE_ID}' as '{PLAYER_NAME}'...")
+        requests.get(f"{BASE_URL}/state?table={TABLE_ID}&player={PLAYER_NAME}", timeout=5)
+    except requests.exceptions.RequestException as e:
+        print(f"Could not connect to server: {e}")
+        exit(1)
+
+    # Start WebSocket in a background thread
+    ws_thread = threading.Thread(target=run_websocket)
+    ws_thread.daemon = True
+    ws_thread.start()
+
+    print("Client started. Waiting for game updates...")
+
+    while ws_thread.is_alive():
+        if player_info['is_turn']:
+            display_menu_and_get_input(last_state)
+        time.sleep(0.5) # Main thread polls to check if it's our turn
+
+    print("Exiting.")
