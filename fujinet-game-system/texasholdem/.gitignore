@@ -1,0 +1,40 @@
+# Compiled binaries (Go executables)
+/server/fujinet-server
+/server/poker_server
+/server/5cardstud-server
+/server/main
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test binaries, built with `go test -c`
+*.test
+
+# Output of the go coverage tool
+*.out
+
+# Go workspace file
+go.work
+
+# Log files
+/server/*.log
+*.log
+
+# IDE files
+/server/*.code-workspace
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
