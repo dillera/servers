@@ -30,6 +30,7 @@ var DefaultGameServerDetails = GameServer{
 		{Platform: "coco", Url: "tnfs://ec.tnfs.io/coco/fbs.dsk"},
 		{Platform: "msdos", Url: "tnfs://ec.tnfs.io/msdos/fbs.img"},
 		{Platform: "c64", Url: "tnfs://ec.tnfs.io/c64/fbs.prg"},
+		{Platform: "ti99", Url: "https://ftp.whtech.com/TIPI/FBS1"},
 	},
 }
 
