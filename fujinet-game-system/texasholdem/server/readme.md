@@ -94,9 +94,46 @@ All paths require the query parameters below, unless otherwise specified.
 
 ### Optional
 * `HASH=[z value]` - **Optional, /state only** - Pass the `z` value from the previously received state. If the state has not changed, the server returns just `"1"`, saving bandwidth and parse time.
+* `BIN=1` - **Optional** - Return a packed binary struct instead of json (see "Binary protocol" below). This is what the cc65/cmoc 8-bit clients use.
+* `BE=1` - **Optional** - Use with bin, emit uint16 values big-endian (CoCo). Default is little-endian (6502).
 * `RAW=1` - **Optional** - Use to return key[byte 0]value[byte 0] pairs instead of json output - similar to FujiNet json parsing, with 0x00 used as delimiter instead of line end
 * `UC=1` - **Optional** - Use with raw, to make the result data upper case
 * `LC=1` - **Optional** - Use with raw, to make the result data lower case
+
+## Binary protocol (bin=1)
+
+8-bit clients read `/state?bin=1` directly into a packed C struct - no parsing.
+The layout must byte-for-byte match `src/misc.h` in the client repo
+(fujinet-5cardstud). All strings are fixed-length, NUL-terminated, and
+**lowercase** (card codes like `ks` `ah`, `??` for hidden). uint16 values are
+little-endian unless `be=1`.
+
+```c
+typedef struct {              // offset
+  char lastResult[81];        //   0
+  uint8_t round;              //  81
+  uint16_t pot;               //  82
+  int8_t activePlayer;        //  84
+  uint8_t moveTime;           //  85
+  uint8_t viewing;            //  86
+  char community[11];         //  87  Texas Hold'em addition (up to 5 cards)
+  uint8_t validMoveCount;     //  98
+  ValidMove validMoves[5];    //  99  { char move[3]; char name[10]; } x5
+  uint8_t playerCount;        // 164
+  Player players[8];          // 165  { char name[9]; uint8_t status; uint16_t bet;
+                              //        char move[8]; uint16_t purse; char hand[11]; }
+} Game;                       // total 429 bytes max (165 + playerCount*33)
+```
+
+Notes:
+* Only `playerCount` player records are sent (the blob is `165 + 33*N` bytes).
+* Status 4 (all-in) is mapped to 1 (playing) in binary mode - 8-bit clients
+  treat status 1 as "in the hand".
+* Valid move display names are word-trimmed to 9 characters (e.g. "All-in").
+* `/tables?bin=1` returns `{ uint8_t count; { char table[9]; char name[21];
+  char players[6]; } x count }`.
+* The layout is locked by tests on both sides: `bin_protocol_test.go` here and
+  `support/host-test/holdem_host_test.c` in the client repo.
 
 ## Move codes
 
