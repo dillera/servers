@@ -104,7 +104,7 @@ All paths require the query parameters below, unless otherwise specified.
 
 8-bit clients read `/state?bin=1` directly into a packed C struct - no parsing.
 The layout must byte-for-byte match `src/misc.h` in the client repo
-(fujinet-5cardstud). All strings are fixed-length, NUL-terminated, and
+(fujinet-texasHoldEm). All strings are fixed-length, NUL-terminated, and
 **lowercase** (card codes like `ks` `ah`, `??` for hidden). uint16 values are
 little-endian unless `be=1`.
 

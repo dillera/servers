@@ -12,7 +12,7 @@ import (
 
 // Byte layout of the packed structs in the 8-bit client's src/misc.h.
 // These constants ARE the wire contract - a change here must be mirrored in the
-// client repo (fujinet-5cardstud/src/misc.h) and vice versa.
+// client repo (fujinet-texasHoldEm/src/misc.h) and vice versa.
 const (
 	binOffRound      = 81  // after lastResult[81]
 	binOffPot        = 82  // uint16
