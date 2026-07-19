@@ -82,6 +82,7 @@ You can view the state as-is by calling `/view`.
 * `/leave` - Leave the table. Each client should call this when a player exits the game
 * `/view?table=N` - View the current state as-is without advancing, as formatted json. Useful for debugging in a browser alongside the client. Only `table` query parameter is required.
 * `/tables` - Returns a list of available REAL tables along with player information. No query parameters are required. Pass `dev=1` for the hidden developer tables.
+* `/version` - Returns the server version string (also logged at startup), e.g. "texasholdem-server v1.1.0 (commit abc12345, ...)". No query parameters are required.
 * `/updateLobby` - Use to manually force a refresh of state to the Lobby. No query parameters are required.
 
 All paths accept GET or POST for ease of use.
