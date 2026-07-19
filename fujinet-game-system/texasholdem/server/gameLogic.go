@@ -298,7 +298,9 @@ func (state *GameState) postBlind(seat int, amount int) int {
 	player.Bet += amount
 	player.totalBet += amount
 	state.Pot += amount
-	player.Move = fmt.Sprintf("POST %d", amount)
+	// Just "POST" - the amount shows as the player's bet, and 8-bit clients
+	// render moves in a 5-character field
+	player.Move = "POST"
 	if player.Purse == 0 {
 		player.Status = STATUS_ALL_IN
 	}
