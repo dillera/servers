@@ -7,6 +7,7 @@ server and using the same compact wire protocol designed for 8-bit clients
 It currently provides:
 * Multiple concurrent games (tables) via the `?table=[Alphanumeric value]` url parameter
 * Bots with distinct personalities (VPIP/PFR/bluff profiles) that play pre-flop and post-flop
+* Bots only play while at least one human is seated - if the last human leaves, all bots fold and the table parks until a human returns
 * Blinds, button rotation, heads-up rules, all-ins with main/side pots
 * Auto moves for players that do not move in time (check if free, otherwise fold)
 * Auto drops players that have not interacted with the server after some time (timed out)
