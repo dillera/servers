@@ -193,6 +193,32 @@ func TestBinaryFullHand(t *testing.T) {
 	}
 }
 
+// TestBinaryBigEndian verifies be=1 flips uint16 byte order (CoCo clients)
+func TestBinaryBigEndian(t *testing.T) {
+	useIntegrationTimers(t)
+	server, tableId := newHTTPTable(t, 3, 81)
+	client := newSimClient(server.URL, tableId, "CocoTest", nil)
+
+	// Join and start the hand, then fetch both endiannesses
+	_, err := client.get(fmt.Sprintf("/state?table=%s&player=CocoTest", tableId))
+	require.NoError(t, err)
+	le, err := client.get(fmt.Sprintf("/state?table=%s&player=CocoTest&bin=1", tableId))
+	require.NoError(t, err)
+	be, err := client.get(fmt.Sprintf("/state?table=%s&player=CocoTest&bin=1&be=1", tableId))
+	require.NoError(t, err)
+
+	require.Equal(t, len(le), len(be), "blob length must not depend on endianness")
+	lePot := binary.LittleEndian.Uint16(le[binOffPot:])
+	bePot := binary.BigEndian.Uint16(be[binOffPot:])
+	assert.Equal(t, lePot, bePot, "pot value identical across endianness")
+	assert.Equal(t, uint16(SB+BB), bePot, "pre-flop pot is the blinds")
+
+	// Player purse field too (offset 20 within the player record)
+	lePurse := binary.LittleEndian.Uint16(le[binOffPlayers+20:])
+	bePurse := binary.BigEndian.Uint16(be[binOffPlayers+20:])
+	assert.Equal(t, lePurse, bePurse, "purse value identical across endianness")
+}
+
 // TestBinaryTablesLayout verifies /tables?bin=1 matches the client's Tables struct
 func TestBinaryTablesLayout(t *testing.T) {
 	server, _ := newHTTPTable(t, 2, 79)
