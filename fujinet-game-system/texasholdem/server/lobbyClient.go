@@ -20,10 +20,10 @@ const (
 // NOTE: Serverurl and client download URLs still point at the 5 Card Stud
 // deployment - update them before registering a production Texas Hold'em lobby
 var DefaultGameServerDetails = GameServer{
-	Appkey:    1,
+	Appkey:    8,
 	Game:      "Texas Hold'em",
 	Region:    "us",
-	Serverurl: "https://5card.carr-designs.com/",
+	Serverurl: "https://th.carr-designs.com/",
 	Clients: []GameClient{
 		{Platform: "atari", Url: "tnfs://ec.tnfs.io/atari/5card.xex"},
 		{Platform: "apple2", Url: "tnfs://ec.tnfs.io/apple2/5card.po"},
