@@ -28,6 +28,7 @@ var DefaultGameServerDetails = GameServer{
 		{Platform: "adam", Url: "TNFS://apps.irata.online/Coleco_Adam/Games/fcs.ddp"},
 		{Platform: "msdos", Url: "tnfs://ec.tnfs.io/msdos/fcs.img"},
 		{Platform: "coco", Url: "tnfs://ec.tnfs.io/coco/fcs.dsk"},
+		{Platform: "ti99", Url: "https://ftp.whtech.com/TIPI/FCS1"},
 	},
 }
 

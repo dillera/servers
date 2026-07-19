@@ -29,6 +29,7 @@ var DefaultGameServerDetails = GameServer{
 		{Platform: "apple2", Url: "tnfs://ec.tnfs.io/apple2/fujitzee.po"},
 		{Platform: "coco", Url: "tnfs://ec.tnfs.io/coco/fujitzee.dsk"},
 		{Platform: "msdos", Url: "tnfs://ec.tnfs.io/msdos/fujitzee.img"},
+		{Platform: "ti99", Url: "https://ftp.whtech.com/TIPI/FJT1"},
 	},
 }
 
